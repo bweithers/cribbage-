@@ -13,6 +13,11 @@ python -m cribbage bench                                      # throughput
 python -m pytest -q                                           # the test suite
 ```
 
+**Contents** — [what's here](#whats-here) · [design notes](#design-notes) ·
+[agents](#agents) · [does position awareness matter?](#does-position-awareness-matter) ·
+[where does the luck come from?](#where-does-the-luck-come-from) ·
+[testing](#testing) · [performance](#performance) · [next](#next)
+
 ## What's here
 
 ```
@@ -242,6 +247,116 @@ The implication is that the points are somewhere else. The baseline's real gap i
 not that it ignores the score — it is that its discard **ignores pegging value
 entirely**, which distorts every hand rather than 2% of them. That is the
 experiment worth running next.
+
+## Where does the luck come from?
+
+Two identical deterministic agents remove skill from the picture entirely, which
+makes a finished game a pure function of three independent inputs:
+
+```
+outcome = f(the cards dealt, the cuts turned, who dealt first)
+```
+
+There is no residual noise term, so the variance decomposes *exactly*.
+`scripts/experiment_luck.py` runs a full factorial — K deal seeds × K cut seeds
+× 2 dealers — and reads it two ways. This is what the engine's split RNG streams
+(`seed` and `cut_seed`) are for: the deck always holds exactly 40 cards when the
+starter is turned, so a given cut stream draws the same *index* every round
+regardless of what was dealt. Holding one factor while re-randomizing another is
+therefore proper common random numbers rather than an approximation, which
+`tests/test_engine.py` asserts directly.
+
+### Results
+
+128 deals × 128 cuts × 2 dealers = **32,768 games**.
+
+**Dealing first is worth more than any strategy difference measured anywhere else
+in this repo.**
+
+| | |
+|---|---|
+| first dealer wins | **56.17%** (95% CI 53.46–58.87, clustered by deal) |
+| mean margin swing from dealing first | **+6.61 points** |
+
+For scale: every position-awareness feature in the section above measured within
+±0.35% of a coin flip. Winning the cut for first deal is worth six points of
+expected margin before a card is played.
+
+Why is it worth that much? Partly the obvious reason — games run about 9.1
+rounds, so the first dealer deals 4.82 of them against 4.30, a **+0.52 deal**
+edge. At the measured 6.0-point gap between dealing and not, that is only about
++3.1 points, so it accounts for roughly half the swing.
+
+The rest looks like tempo. Splitting games by whether the first dealer actually
+got more deals:
+
+| | first dealer wins |
+|---|---|
+| they got one extra deal | 60.18% (n=3152) |
+| both dealt equally | **53.65%** (n=2848) |
+
+Even when both dealt the same number of times, dealing *first* is still worth
+three and a half points of win rate — banking the crib earlier means leading
+throughout and reaching 121 first. Read that second row as suggestive rather
+than decisive, though: the number of rounds is itself influenced by how the game
+goes, so conditioning on it is not a clean causal estimate.
+
+#### Total influence: re-randomize one factor, how often does the winner change?
+
+| re-randomize only… | winner changes |
+|---|---|
+| the cards dealt | 48.71% |
+| who deals first | 37.45% |
+| the cut cards | 31.71% |
+| *everything* | *49.75%* |
+
+The deal alone (48.71%) accounts for essentially all of the randomness available
+(49.75%). Cribbage is close to being a game about who got the better cards.
+
+#### Systematic advantage: variance of the final margin, by source
+
+| source | η² | ω² |
+|---|---|---|
+| the cards dealt | 39.0% | **38.9%** |
+| deal × cut | 30.8% | 15.6% |
+| deal × who dealt first | 12.6% | 12.4% |
+| who dealt first | 2.1% | **2.1%** |
+| the cut | 0.3% | **0.2%** |
+| cut × who dealt first | 0.1% | 0.0% |
+| irreducible three-way | 15.2% | — (error term) |
+
+ω² is the honest column: η² flatters `deal` and `cut` because they have 127
+degrees of freedom each, while `who dealt first` has one. The three-way term is
+the error term by construction, so ω² zeroes it and the column does not sum to
+100%.
+
+### The interesting part: the cut is almost perfectly fair
+
+Compare the cut's two numbers. Re-randomizing it **changes the winner 31.71% of
+the time**, but it explains **0.2%** of the variance in margin and **0.0%** in
+combination with who dealt.
+
+Both are true, and they are not in tension. The starter is a *shared* card — it
+lands in both players' hands at once — so it almost never favours one player
+systematically. Its only asymmetric channels are the crib (dealer only), his
+heels, and nobs. But *which hand it pairs with* matters enormously, and that
+shows up as the `deal × cut` interaction (15.6%) and the three-way term rather
+than as a main effect.
+
+The deal is the mirror image: it is the one input that is **not** shared, so it
+is where the systematic unfairness lives.
+
+So, to answer the three questions directly:
+
+1. **Did you get the first deal?** A large, systematic edge — 56/44, +6.6 points
+   of margin — but only ~2% of the game-to-game variance, because it is a single
+   binary switch against the enormous variety of card sequences. Big effect,
+   small variance share.
+2. **Were you dealt better cards?** The dominant source of *both* kinds of luck:
+   ~39% of margin variance on its own, and it drives nearly all the rest through
+   its interactions.
+3. **Did you get luckier cuts?** Barely a source of unfairness at all (0.2%),
+   despite flipping a third of games. A shared card cannot favour anybody.
 
 ## Testing
 

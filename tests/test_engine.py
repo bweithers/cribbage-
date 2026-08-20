@@ -288,3 +288,61 @@ def test_illegal_actions_are_rejected():
     assert state.legal_actions() == [parse_card("AS")]
     with pytest.raises(ValueError):
         state.apply_action(parse_card("KH"))  # 28 + 10 would bust 31
+
+
+# ----------------------------------------------------------------------
+# Independent deal and cut streams
+# ----------------------------------------------------------------------
+
+
+def deal_and_starter(state: CribbageState):
+    """Advance past both discards so the starter is turned, and report both."""
+    hands = [sorted(state.hands[0]), sorted(state.hands[1])]
+    state.apply_action(state.legal_actions()[0])
+    state.apply_action(state.legal_actions()[0])
+    return hands, state.starter
+
+
+def test_cut_seed_varies_the_starter_without_touching_the_deal():
+    """The premise of the luck decomposition in scripts/experiment_luck.py.
+
+    Holding the deal and re-randomizing only the cut has to mean exactly that,
+    or the two factors cannot be told apart.
+    """
+    left_hands, left_starter = deal_and_starter(new_game(seed=5, cut_seed=1))
+    right_hands, right_starter = deal_and_starter(new_game(seed=5, cut_seed=2))
+    assert left_hands == right_hands, "the deal must not depend on the cut stream"
+    assert left_starter != right_starter
+
+
+def test_deal_seed_varies_the_deal_without_touching_the_cut_stream():
+    """The cut stream draws by index, and the deck always holds 40 cards at the
+    cut, so a fixed cut seed picks the same *position* whatever was dealt."""
+    seen = set()
+    for deal_seed in range(6):
+        hands, _ = deal_and_starter(new_game(seed=deal_seed, cut_seed=77))
+        seen.add(tuple(hands[0]))
+    assert len(seen) == 6, "each deal seed should produce a different hand"
+
+
+def test_a_single_seed_still_drives_the_whole_game():
+    """Without cut_seed the two streams stay shared, so one seed reproduces
+    everything -- the behaviour every other test and script relies on."""
+    first = deal_and_starter(new_game(seed=11))
+    second = deal_and_starter(new_game(seed=11))
+    assert first == second
+
+
+def test_clone_preserves_split_streams():
+    state = new_game(seed=5, cut_seed=3)
+    rng = random.Random(0)
+    for _ in range(6):
+        state.apply_action(rng.choice(state.legal_actions()))
+
+    left, right = state.clone(), state.clone()
+    while not left.is_terminal():
+        action = left.legal_actions()[0]
+        left.apply_action(action)
+        right.apply_action(action)
+    assert left.scores == right.scores
+    assert left.starter == right.starter

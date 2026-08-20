@@ -165,7 +165,7 @@ class CribbageState:
         "target", "scores", "dealer", "phase", "round_index",
         "hands", "dealt", "kept", "discards", "crib", "starter", "deck",
         "count", "seq", "played", "play_order", "turn", "last_to_play",
-        "discard_turn", "events", "winner", "_rng",
+        "discard_turn", "events", "winner", "_rng", "_cut_rng",
     )
 
     def __init__(
@@ -174,6 +174,7 @@ class CribbageState:
         target: int = DEFAULT_TARGET,
         seed: Optional[int] = None,
         rng: Optional[random.Random] = None,
+        cut_seed: Optional[int] = None,
         _blank: bool = False,
     ):
         self.target = target
@@ -183,6 +184,14 @@ class CribbageState:
         self.winner: Optional[int] = None
         self.events: list[Event] = []
         self._rng = rng if rng is not None else random.Random(seed)
+        # By default the cut is drawn from the same stream as the deal, so a
+        # single seed reproduces a whole game.  Passing `cut_seed` splits them
+        # into independent streams, which is what lets an analysis hold the
+        # cards fixed and re-randomize only the starters (see
+        # scripts/experiment_luck.py).  The deck always has exactly 40 cards
+        # left at cut time, so a given cut stream draws the same *index* every
+        # round regardless of what was dealt -- proper common random numbers.
+        self._cut_rng = random.Random(cut_seed) if cut_seed is not None else self._rng
 
         self.phase = Phase.DISCARD
         self.hands: list[list[int]] = [[], []]
@@ -319,10 +328,18 @@ class CribbageState:
         other.winner = self.winner
         other._rng = random.Random()
         other._rng.setstate(self._rng.getstate())
+        if self._cut_rng is self._rng:
+            other._cut_rng = other._rng
+        else:
+            other._cut_rng = random.Random()
+            other._cut_rng.setstate(self._cut_rng.getstate())
         return other
 
     def reseed(self, seed: Optional[int] = None) -> None:
+        shared = self._cut_rng is self._rng
         self._rng = random.Random(seed)
+        if shared:
+            self._cut_rng = self._rng
 
     def determinize(self, player: int, rng: Optional[random.Random] = None) -> "CribbageState":
         """Sample a full world consistent with ``player``'s information state.
@@ -454,7 +471,7 @@ class CribbageState:
 
     def _cut_and_start_play(self) -> None:
         """Turn the starter, pay his heels, and open the play."""
-        self.starter = self.deck.pop(self._rng.randrange(len(self.deck)))
+        self.starter = self.deck.pop(self._cut_rng.randrange(len(self.deck)))
         self.events.append(
             Event(self.round_index, self.dealer, 0, "cut", card_str(self.starter))
         )
@@ -643,6 +660,11 @@ def new_game(
     seed: Optional[int] = None,
     dealer: int = 0,
     target: int = DEFAULT_TARGET,
+    cut_seed: Optional[int] = None,
 ) -> CribbageState:
-    """A fresh game, dealt and sitting at the pone's discard decision."""
-    return CribbageState(dealer=dealer, target=target, seed=seed)
+    """A fresh game, dealt and sitting at the pone's discard decision.
+
+    Pass ``cut_seed`` to draw the starters from their own stream, independent of
+    the deal.
+    """
+    return CribbageState(dealer=dealer, target=target, seed=seed, cut_seed=cut_seed)
