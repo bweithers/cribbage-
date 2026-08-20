@@ -16,6 +16,19 @@ the cards the opponent could still be holding, and the probability that they
 hold *any* playable card is computed hypergeometrically from the size of their
 hand.  Familiar cribbage maxims -- do not lead a five, do not take the count to
 21 -- are not coded anywhere; they fall out of that reply term.
+
+Known gaps, so nothing is measured against this under the wrong impression.  The
+46-starter enumeration is exact; the policy around it is not:
+
+* The crib term assumes the opponent lays away uniformly at random.
+* The crib table is keyed on the lay-away alone, ignoring the rest of your hand.
+* The discard ignores pegging value completely -- four fives peg badly and
+  A-2-3-4 pegs well, and nothing here can tell the difference.
+* It maximizes points, not win probability.  ``my_score`` and ``opp_score`` are
+  right there in the information state and are never read, so it plays 118-115
+  exactly as it plays 20-15.
+
+That makes it a floor to measure against rather than a ceiling.
 """
 
 from __future__ import annotations

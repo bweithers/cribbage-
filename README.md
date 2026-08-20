@@ -20,7 +20,7 @@ cribbage/
   cards.py       a card is an int in [0,52): rank = c >> 2, suit = c & 3
   scoring.py     table-driven scoring for the show and the play
   engine.py      CribbageState: legal_actions / apply_action / clone / determinize
-  crib_table.py  exact expected crib value for every canonical lay-away
+  crib_table.py  expected crib value per lay-away, given a uniform opponent
   agents/        the agent interface, plus random and one-ply expected-value baselines
   arena.py       match running and statistics
   cli.py         demo / match / bench
@@ -40,8 +40,8 @@ planes will want.
 multiset of ranks, and there are just 6,175 legal five-card rank multisets, so
 they are all enumerated at import. Only the flush and nobs — which need suits and
 need to know which card was the starter — are computed per call. Result: about
-1.5M hands per second, which is what makes the exact expected-value discard below
-affordable.
+1.5M hands per second, which is what makes the discard's exact 46-starter
+enumeration below affordable.
 
 **The engine is a state machine, not a callback loop.** `legal_actions()` /
 `apply_action()` / `clone()`, in the style of OpenSpiel. A callback loop is easier
@@ -104,11 +104,35 @@ recording, training — is deliberately **not here yet**.
     reply term.
 - `greedy` — the same agent with the reply term switched off. Useful as a control.
 
-`crib_table.py` is exact under a stated assumption: that the opponent's two crib
-cards are a uniformly random pair. Real opponents are not uniform — the pone lays
-away defensively — so a stronger agent would eventually want separate dealer and
-pone tables conditioned on opponent policy. Regenerate with
-`python scripts/build_crib_table.py`.
+### What the heuristic is not
+
+One term inside it is exact: for a given four-card keep, `E[hand score]` over all
+46 possible starters is computed by full enumeration, no sampling. The *policy*
+built around that term is not exact, in four separate ways, and they are worth
+knowing before anything is measured against it:
+
+1. **The crib term assumes a uniform opponent.** `crib_table.py` weights every
+   opponent lay-away equally. Real pones lay away defensively and real dealers lay
+   away helpfully, so a stronger agent would want separate dealer and pone tables
+   conditioned on opponent policy. Regenerate with
+   `python scripts/build_crib_table.py`.
+2. **The crib table ignores your own hand.** It is keyed on
+   `(rank, rank, suited)` alone, but which six cards you hold changes what is left
+   in the deck and therefore the crib distribution.
+3. **It ignores pegging value entirely.** The discard maximizes hand plus crib and
+   nothing else. Four fives peg badly and A-2-3-4 pegs well; this agent cannot see
+   the difference. Serious discard analysis carries an expected-peg term.
+4. **It maximizes points, not win probability.** `my_score` and `opp_score` are in
+   the `InfoState` and the agent never reads them. At 118-115 you should play
+   nothing like you do at 20-15.
+
+The play side is 1-ply, averages the opponent's reply rather than assuming their
+best one, and draws that reply from a pool that includes the crib and the undealt
+deck — cards the opponent demonstrably cannot hold.
+
+So it is a reasonable floor to measure against, not a ceiling. Gaps 3 and 4 in
+particular are places a self-play net should be expected to *beat* it rather than
+converge to it.
 
 ## Testing
 
@@ -149,10 +173,10 @@ From `python -m cribbage bench` on one core:
 | random self-play | ~410 games/sec |
 | heuristic self-play | ~46 games/sec |
 
-The engine is not the bottleneck for the heuristic agent — its exact 46-starter
-discard enumeration is, at roughly 690 hand evaluations per discard. That is a
-deliberate trade: an exactly-correct reference policy now, with the option to
-approximate later. The scoring and play hot paths are small isolated functions,
+The engine is not the bottleneck for the heuristic agent — its 46-starter discard
+enumeration is, at roughly 690 hand evaluations per discard. That is a deliberate
+trade: an exact hand-EV term now, with the option to approximate it later. The
+scoring and play hot paths are small isolated functions,
 so they can be swapped for a vectorized or native implementation without touching
 the rules.
 
@@ -164,5 +188,6 @@ sees; the action space (one masked head over 15 discard pairs plus 52 cards,
 versus separate heads); where the net attaches to ISMCTS (policy prior, value
 head, or both); how to handle the imperfect information honestly, including why
 vanilla AlphaZero-style MCTS is unsound here and what ISMCTS and CFR do about it;
-and whether to bootstrap from the exact expected-value discard policy before
-self-play.
+and whether to bootstrap from the heuristic discard policy before self-play —
+bearing in mind it is pegging-blind and position-blind, so imitating it too
+closely would inherit both.
