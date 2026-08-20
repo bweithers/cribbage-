@@ -33,6 +33,7 @@ That makes it a floor to measure against rather than a ceiling.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from itertools import combinations
 from math import comb
 from typing import Sequence
@@ -43,7 +44,44 @@ from ..engine import MAX_COUNT, InfoState
 from ..scoring import score_hand, score_play
 from .base import Agent
 
-__all__ = ["HeuristicAgent"]
+__all__ = ["HeuristicAgent", "DiscardOption"]
+
+
+@dataclass(frozen=True)
+class DiscardOption:
+    """One of the fifteen ways to split a dealt hand, fully evaluated.
+
+    ``scores`` is the hand's score against every one of the 46 possible
+    starters, in starter order.  Keeping the whole list rather than just its
+    mean costs nothing -- the enumeration has already happened -- and it is what
+    lets a position-aware agent ask for ``P(score >= n)`` instead of settling
+    for the average.
+    """
+
+    pair: tuple[int, int]
+    keep: tuple[int, ...]
+    scores: tuple[int, ...]
+    crib: float
+
+    @property
+    def mean(self) -> float:
+        return sum(self.scores) / len(self.scores)
+
+    @property
+    def stdev(self) -> float:
+        """Spread of the hand's score across starters.
+
+        Free, since the enumeration already happened, and it is what lets an
+        agent prefer a safe keep when ahead and a swingy one when behind.
+        """
+        mean = self.mean
+        return (sum((s - mean) ** 2 for s in self.scores) / len(self.scores)) ** 0.5
+
+    def probability_at_least(self, needed: float) -> float:
+        """Share of starters that bring the hand to ``needed`` points or more."""
+        if needed <= 0:
+            return 1.0
+        return sum(1 for s in self.scores if s >= needed) / len(self.scores)
 
 
 class HeuristicAgent(Agent):
@@ -57,39 +95,54 @@ class HeuristicAgent(Agent):
 
     # ------------------------------------------------------------------
 
-    def discard(self, info: InfoState) -> Sequence[int]:
+    def discard_options(self, info: InfoState) -> list[DiscardOption]:
+        """Evaluate all fifteen lay-aways against all 46 possible starters.
+
+        Shared with :class:`~cribbage.agents.positional.PositionalAgent`, which
+        keeps the expensive enumeration in one place and lets the subclass change
+        only the objective applied to it.
+        """
         hand = list(info.hand)
         held = set(hand)
         starters = [c for c in range(NUM_CARDS) if c not in held]
 
-        best_pair = None
-        best_value = float("-inf")
-
+        options = []
         for pair in combinations(hand, 2):
             laid = set(pair)
-            keep = [c for c in hand if c not in laid]
+            keep = tuple(c for c in hand if c not in laid)
+            options.append(
+                DiscardOption(
+                    pair=pair,
+                    keep=keep,
+                    scores=tuple(score_hand(keep, s) for s in starters),
+                    crib=crib_ev(pair[0], pair[1]),
+                )
+            )
+        return options
 
-            total = 0
-            for starter in starters:
-                total += score_hand(keep, starter)
-            expected_hand = total / len(starters)
+    def discard_value(self, option: DiscardOption, info: InfoState) -> float:
+        """Expected points this deal: my hand, plus or minus the crib."""
+        crib = option.crib * self.crib_weight
+        return option.mean + (crib if info.is_dealer else -crib)
 
-            crib = crib_ev(pair[0], pair[1]) * self.crib_weight
-            value = expected_hand + (crib if info.is_dealer else -crib)
-
-            if value > best_value:
-                best_value, best_pair = value, pair
-
-        assert best_pair is not None
-        return best_pair
+    def discard(self, info: InfoState) -> Sequence[int]:
+        options = self.discard_options(info)
+        best = max(options, key=lambda option: self.discard_value(option, info))
+        return best.pair
 
     # ------------------------------------------------------------------
+
+    def effective_risk(self, info: InfoState) -> float:
+        """How much to fear the opponent's reply.  Constant here; position-aware
+        subclasses scale it by who is closer to going out."""
+        return self.risk_weight
 
     def play(self, info: InfoState) -> int:
         legal = list(info.legal)
         if len(legal) == 1:
             return legal[0]
 
+        risk_weight = self.effective_risk(info)
         seq = list(info.seq)
         # Cards the opponent might hold.  This pool also contains the crib and
         # the undealt deck, which is the same approximation any player makes at
@@ -119,7 +172,7 @@ class HeuristicAgent(Agent):
 
                 if replies:
                     mean_reply = sum(score_play(after + [r]) for r in replies) / len(replies)
-                    value -= self.risk_weight * (1.0 - p_stuck) * mean_reply
+                    value -= risk_weight * (1.0 - p_stuck) * mean_reply
                 # If they cannot answer, this card very likely takes the go.
                 value += p_stuck * 1.0
 

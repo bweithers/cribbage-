@@ -103,6 +103,12 @@ recording, training — is deliberately **not here yet**.
     don't take the count to 21 — are nowhere in the code; they fall out of the
     reply term.
 - `greedy` — the same agent with the reply term switched off. Useful as a control.
+- `positional` — `heuristic` plus awareness of the score: a continuous stance that
+  defends when ahead and reaches for variance when behind, and an endgame
+  objective that maximizes the probability of going out this deal rather than
+  expected points. Every channel is an independent flag, and with all of them off
+  it reproduces `heuristic` decision-for-decision. See the measurements below —
+  it is an experiment, not an improvement.
 
 ### What the heuristic is not
 
@@ -133,6 +139,109 @@ deck — cards the opponent demonstrably cannot hold.
 So it is a reasonable floor to measure against, not a ceiling. Gaps 3 and 4 in
 particular are places a self-play net should be expected to *beat* it rather than
 converge to it.
+
+## Does position awareness matter?
+
+`heuristic` maximizes points and never reads the score, which is plainly wrong
+for a race to 121. `positional` adds two mechanisms — a continuous **stance**
+that defends when ahead and reaches for variance when behind, and a sharp
+**endgame** objective that maximizes the probability of going out this deal
+rather than expected points. Each channel is a separate flag so it can be
+ablated on its own.
+
+Measuring this needs care. Cribbage deal luck is enormous: for agents this
+similar, **96% or more of deal-pairs split** — the same cards flip the result
+when the seats swap, so the deal decided the game, not the play. So `scripts/experiment_position.py` plays every deal sequence
+twice with the seats reversed and computes intervals on per-pair scores rather
+than per-game results. That cuts the interval roughly threefold for the same
+compute, which is the difference between resolving these effects and not.
+
+The control that everything rests on: `PositionalAgent` with every feature off
+reproduces `HeuristicAgent` decision-for-decision, asserted in
+`tests/test_positional.py`.
+
+### Results
+
+3,000 mirrored pairs (6,000 games) per row, against the `heuristic` baseline.
+Seventeen comparisons at 95% confidence means roughly one is expected to clear
+significance by chance, so the script says so in its own footer and any single
+marginal winner gets re-run on fresh seeds before being believed:
+
+| variant | win rate | 95% interval | verdict |
+|---|---|---|---|
+| endgame | 49.65% | [49.33, 49.97] | **significantly worse** |
+| stance-variance | 50.12% | [49.85, 50.38] | no effect |
+| stance-crib | 50.07% | [49.88, 50.25] | no effect |
+| stance-peg | 49.93% | [49.80, 50.06] | no effect |
+| crib-defense | 50.00% | [49.65, 50.35] | no effect |
+| five-penalty | 49.92% | [49.80, 50.03] | no effect |
+| finish | 50.00% | [50.00, 50.00] | never fires |
+| all combined | 50.00% | [49.54, 50.46] | no effect |
+
+**Position awareness, as implemented here, is worth approximately nothing.**
+
+Four things are worth pulling out of that table.
+
+**"Never throw points into their crib" is already priced in.** The folk rule
+tests at exactly 50.00% (58 pairs swept each way), and an explicit extra penalty
+on laying away a five is likewise null. This is not because defence does not
+matter — it is because `crib_table.py` already charges the correct expected cost,
+and 5-5 is already the most expensive lay-away in the table at 9.0 points.
+Adding instinct on top of correct arithmetic just makes the arithmetic wrong,
+and the sweep shows it degrading monotonically as the thumb presses harder:
+
+| extra crib weight | win rate | verdict |
+|---|---|---|
+| 0.25 | 49.73% | no effect |
+| 0.5 | 50.50% | no effect |
+| 1.0 | 49.20% | **worse** |
+| 2.0 | 47.97% | **worse** |
+| 4.0 | 46.20% | **worse** |
+
+Refusing to feed the crib means wrecking your own hand to do it, and past about
+a point of thumb the trade stops being worth it.
+
+**The one "significant" positive did not replicate.** Sweeping the variance gain
+turned up `stance_variance=0.15` at +0.30% with an interval clearing 50%. Re-run
+on fresh seeds at twice the sample size, the same idea came back at **+0.02%,
+interval [49.87, 50.16]** — dead null. That is exactly the false positive you
+expect from seventeen comparisons at 95% confidence, and it is why the
+replication step is not optional.
+
+**Some features are inert, and the win rate cannot tell you which.** `finish`
+(play a card that wins outright) returned 50.00% with all 3,000 pairs splitting —
+the signature of a feature that changed *zero* decisions, because greedy pegging
+already picks that card. An earlier version of the whole positional agent scored
+this way across the board; instrumenting how often each flag actually changes an
+action, rather than trusting the null result, is what caught it.
+
+**The endgame objective was actively harmful, and the reason was diagnosable.**
+It thresholds on `to_go − expected pegging`, but pegging has a standard deviation
+of about 2.2 points — comparable to the spread of a hand's score across starters
+— so it optimized hard against a threshold that was itself badly uncertain.
+Folding over the measured pegging distribution instead of its mean
+(`endgame_smoothing`, on by default) is the principled repair. Tested head to
+head on the same fresh seeds, 6,000 pairs each:
+
+| endgame variant | win rate | 95% interval | verdict |
+|---|---|---|---|
+| smoothing on | 50.07% | [49.83, 50.31] | no effect |
+| smoothing off | 49.70% | [49.47, 49.93] | **worse** |
+
+So the diagnosis was right — the sharp threshold was the harm, and smoothing
+removes it. It buys neutrality, not an edge.
+
+### Why so little?
+
+The baseline is already doing exact 46-starter enumeration with a correctly
+signed crib term, and these features only perturb that objective slightly: they
+change **1–3% of discards** and under 0.5% of pegging decisions. A small edge on
+2% of decisions is a very small edge overall.
+
+The implication is that the points are somewhere else. The baseline's real gap is
+not that it ignores the score — it is that its discard **ignores pegging value
+entirely**, which distorts every hand rather than 2% of them. That is the
+experiment worth running next.
 
 ## Testing
 
