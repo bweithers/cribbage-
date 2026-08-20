@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cribbage"
+version = "0.1.0"
+description = "A two-player cribbage simulator built as the foundation for a search/neural-net engine"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+cribbage = "cribbage.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cribbage*"]
+
+[tool.setuptools.package-data]
+cribbage = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: exhaustive; needs --runslow"]
