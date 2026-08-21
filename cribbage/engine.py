@@ -29,7 +29,7 @@ import random
 from dataclasses import dataclass
 from enum import IntEnum
 from itertools import combinations
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from .cards import CARD_VALUES, JACK, NUM_CARDS, card_str, hand_str
 from .scoring import score_hand_detail, score_play
@@ -38,6 +38,7 @@ __all__ = [
     "Phase",
     "Event",
     "RoundRecord",
+    "CutContext",
     "InfoState",
     "GameResult",
     "CribbageState",
@@ -82,6 +83,29 @@ class Event:
     points: int
     kind: str
     detail: str = ""
+
+
+@dataclass(frozen=True)
+class CutContext:
+    """Everything settled at the moment the starter is about to be turned.
+
+    Both discards are already in, so the holdings, the crib and the forty
+    undealt cards are all fixed and the only open question is which of the forty
+    comes up.  Handed to a ``cut_chooser`` so it can decide *knowing what the
+    cut will be worth* -- which a seed cannot, since a seed has to be fixed
+    before anyone has discarded.
+    """
+
+    round_index: int
+    dealer: int
+    dealt: tuple[tuple[int, ...], tuple[int, ...]]
+    kept: tuple[tuple[int, ...], tuple[int, ...]]
+    crib: tuple[int, ...]
+    deck: tuple[int, ...]
+
+    @property
+    def pone(self) -> int:
+        return 1 - self.dealer
 
 
 @dataclass(frozen=True)
@@ -191,7 +215,7 @@ class CribbageState:
         "hands", "dealt", "kept", "discards", "crib", "starter", "deck",
         "count", "seq", "played", "play_order", "turn", "last_to_play",
         "discard_turn", "events", "winner", "_rng", "_cut_rng", "_cut_indices",
-        "round_records",
+        "_cut_chooser", "round_records",
     )
 
     def __init__(
@@ -202,6 +226,7 @@ class CribbageState:
         rng: Optional[random.Random] = None,
         cut_seed: Optional[int] = None,
         cut_indices: Optional[Sequence[int]] = None,
+        cut_chooser: Optional[Callable[["CutContext"], int]] = None,
         _blank: bool = False,
     ):
         self.target = target
@@ -226,6 +251,10 @@ class CribbageState:
         # a single round and leave every other cut alone.  Rounds past the end
         # of the list fall back to the stream.
         self._cut_indices = list(cut_indices) if cut_indices is not None else None
+        # Highest precedence of the three cut controls, and the only one that
+        # can see what it is doing: it runs after both discards, so it knows the
+        # holdings and can pick a starter for what it will actually be worth.
+        self._cut_chooser = cut_chooser
 
         self.phase = Phase.DISCARD
         self.hands: list[list[int]] = [[], []]
@@ -371,6 +400,7 @@ class CribbageState:
         other._cut_indices = (
             None if self._cut_indices is None else list(self._cut_indices)
         )
+        other._cut_chooser = self._cut_chooser
         return other
 
     def reseed(self, seed: Optional[int] = None) -> None:
@@ -509,7 +539,14 @@ class CribbageState:
 
     def _cut_and_start_play(self) -> None:
         """Turn the starter, pay his heels, and open the play."""
-        if self._cut_indices is not None and self.round_index <= len(self._cut_indices):
+        if self._cut_chooser is not None:
+            chosen = self._cut_chooser(self.cut_context())
+            if chosen not in self.deck:
+                raise ValueError(
+                    f"cut_chooser returned {card_str(chosen)}, which is not in the deck"
+                )
+            position = self.deck.index(chosen)
+        elif self._cut_indices is not None and self.round_index <= len(self._cut_indices):
             position = self._cut_indices[self.round_index - 1] % len(self.deck)
         else:
             position = self._cut_rng.randrange(len(self.deck))
@@ -540,6 +577,17 @@ class CribbageState:
         self.turn = self.pone
         self.last_to_play = None
         self._advance_play()
+
+    def cut_context(self) -> CutContext:
+        """The position as it stands with both discards in and the cut pending."""
+        return CutContext(
+            round_index=self.round_index,
+            dealer=self.dealer,
+            dealt=(tuple(self.dealt[0]), tuple(self.dealt[1])),
+            kept=(tuple(self.kept[0]), tuple(self.kept[1])),
+            crib=tuple(self.crib),
+            deck=tuple(self.deck),
+        )
 
     def _play_card(self, card: int) -> None:
         player = self.turn
@@ -714,13 +762,15 @@ def new_game(
     target: int = DEFAULT_TARGET,
     cut_seed: Optional[int] = None,
     cut_indices: Optional[Sequence[int]] = None,
+    cut_chooser: Optional[Callable[[CutContext], int]] = None,
 ) -> CribbageState:
     """A fresh game, dealt and sitting at the pone's discard decision.
 
-    Pass ``cut_seed`` to draw the starters from their own stream, independent of
-    the deal, or ``cut_indices`` to prescribe each round's cut position outright.
+    Pass ``cut_seed`` to draw the starters from their own stream, ``cut_indices``
+    to prescribe each round's cut position, or ``cut_chooser`` to decide each
+    cut with the holdings in view.
     """
     return CribbageState(
-        dealer=dealer, target=target, seed=seed,
-        cut_seed=cut_seed, cut_indices=cut_indices,
+        dealer=dealer, target=target, seed=seed, cut_seed=cut_seed,
+        cut_indices=cut_indices, cut_chooser=cut_chooser,
     )

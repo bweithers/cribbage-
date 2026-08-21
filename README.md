@@ -7,6 +7,7 @@ Zero runtime dependencies — pure standard library. `pytest` is needed only to
 run the tests.
 
 ```bash
+python -m cribbage play  --luck 75                            # play it yourself, cuts rigged
 python -m cribbage demo  --seed 3                             # a full annotated game
 python -m cribbage match --p0 heuristic --p1 random -n 2000   # statistics with confidence intervals
 python -m cribbage bench                                      # throughput
@@ -444,6 +445,35 @@ Scope: this is the cut as realised at the show — hands, crib, his heels, nobs.
 Pegging is excluded; the starter barely touches it and could not be attributed
 cleanly. Rounds cut short by someone winning before the show are excluded and
 counted separately.
+
+### Playing a rigged game
+
+`python -m cribbage play --luck 75` deals you a real game against the heuristic
+agent and turns **every** starter at the 75th percentile of what it could have
+been for you, so you can feel what a given grade of cut luck is actually like.
+
+This is exact, not a search, and the reason is a nice bit of timing: **the cut
+happens after both discards.** A seed has to be fixed before anyone has thrown
+anything, so it cannot know what a card will be worth — the same five is a gift
+beside one holding and a blank beside another. By the time the starter is
+turned, the holdings and the crib are settled and all forty remaining cards can
+be scored exactly. `PercentileCut` ranks them and turns the one you asked for.
+
+The interesting thing it exposes is how per-round luck **compounds**. Every cut
+at the 75th percentile is not a 75th-percentile game:
+
+| every cut at | game z | net points |
+|---|---|---|
+| 0th percentile | −4.48 | −48.6 |
+| 25th | −1.82 | −22.4 |
+| 50th | +0.06 | +0.7 |
+| 75th | **+1.82** | **+22.2** |
+| 100th | +4.54 | +48.9 |
+
+Per-round edges add, while their standard deviations only add in quadrature, so
+a steady 75th-percentile cut lands near z = +1.8 for the game — worth about 22
+points, roughly a fifth of the board. Playing a few at 25 and a few at 75 is a
+faster way to calibrate what "the cards ran against me" is worth than any table.
 
 ### The three questions, answered
 

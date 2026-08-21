@@ -37,25 +37,41 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from typing import Sequence
+
 from .cards import JACK, rank_of
-from .engine import CribbageState, RoundRecord
+from .engine import CribbageState, CutContext, RoundRecord
 from .scoring import score_hand
 
-__all__ = ["RoundCutLuck", "CutLuck", "round_cut_luck", "cut_luck"]
+__all__ = [
+    "RoundCutLuck", "CutLuck", "PercentileCut",
+    "round_cut_luck", "cut_luck", "show_points",
+]
 
 
-def _show_points(record: RoundRecord, starter: int) -> tuple[float, float]:
-    """Show points for (player 0, player 1) if ``starter`` had been the cut."""
-    dealer = record.dealer
+def show_points(
+    kept: Sequence[Sequence[int]],
+    crib: Sequence[int],
+    dealer: int,
+    starter: int,
+) -> tuple[float, float]:
+    """Show points for (player 0, player 1) if ``starter`` were the cut.
+
+    Hands, crib, his heels and nobs -- everything the starter is worth once the
+    cards are down.
+    """
     pone = 1 - dealer
-
     points = [0.0, 0.0]
-    points[pone] = score_hand(record.kept[pone], starter)
-    points[dealer] = score_hand(record.kept[dealer], starter)
-    points[dealer] += score_hand(record.crib, starter, is_crib=True)
+    points[pone] = score_hand(kept[pone], starter)
+    points[dealer] = score_hand(kept[dealer], starter)
+    points[dealer] += score_hand(crib, starter, is_crib=True)
     if rank_of(starter) == JACK:
         points[dealer] += 2  # his heels
     return points[0], points[1]
+
+
+def _show_points(record: RoundRecord, starter: int) -> tuple[float, float]:
+    return show_points(record.kept, record.crib, record.dealer, starter)
 
 
 @dataclass(frozen=True)
@@ -189,3 +205,47 @@ def cut_luck(state: CribbageState, player: int) -> CutLuck:
         rounds=rows,
         skipped=len(state.round_records) - len(rows),
     )
+
+
+# ----------------------------------------------------------------------
+# Dealing a cut of a chosen quality
+# ----------------------------------------------------------------------
+
+
+class PercentileCut:
+    """Turn each round's starter at a fixed percentile of how good it could be.
+
+    A seed cannot do this.  A seed has to be fixed before anyone discards, so it
+    cannot know what the cut will be worth -- the same card is a gift beside one
+    holding and a blank beside another.  The cut, though, happens *after* both
+    discards, at which point the holdings and the crib are settled and every one
+    of the forty remaining cards can be scored exactly.  So this ranks all forty
+    by what they would be worth to ``player`` net of their opponent, and turns
+    the one sitting at ``percentile``.
+
+    100 is the best card in the deck for you every single round, 0 the worst, 50
+    the median.  Note that a *per-round* percentile compounds over a game: nine
+    rounds each at the 75th does not give a 75th-percentile game, it gives a far
+    more lopsided one, since the edges add while the standard deviations only
+    add in quadrature.
+    """
+
+    def __init__(self, player: int, percentile: float):
+        if not 0 <= percentile <= 100:
+            raise ValueError(f"percentile must be in [0, 100], got {percentile}")
+        self.player = player
+        self.percentile = percentile
+
+    def __call__(self, context: CutContext) -> int:
+        opponent = 1 - self.player
+        scored = []
+        for card in context.deck:
+            points = show_points(context.kept, context.crib, context.dealer, card)
+            # Sort by (value, card) so ties resolve deterministically.
+            scored.append((points[self.player] - points[opponent], card))
+        scored.sort()
+        position = round((self.percentile / 100) * (len(scored) - 1))
+        return scored[position][1]
+
+    def __repr__(self) -> str:
+        return f"PercentileCut(player={self.player}, percentile={self.percentile})"

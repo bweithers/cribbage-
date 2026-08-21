@@ -11,6 +11,7 @@ from .agents import AGENTS, make_agent
 from .arena import play_game, run_match
 from .cards import card_str
 from .engine import DEFAULT_TARGET, CribbageState, new_game
+from .interactive import play_interactive
 from .luck import cut_luck
 
 __all__ = ["main", "format_transcript"]
@@ -143,6 +144,15 @@ def cmd_luck(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_play(args: argparse.Namespace) -> int:
+    opponent = make_agent(args.opponent, seed=args.seed)
+    play_interactive(
+        opponent, seed=args.seed, human=args.seat, dealer=args.dealer,
+        target=args.target, percentile=args.luck,
+    )
+    return 0
+
+
 def cmd_match(args: argparse.Namespace) -> int:
     agents = [make_agent(args.p0, seed=args.seed), make_agent(args.p1, seed=args.seed + 1)]
 
@@ -239,6 +249,18 @@ def build_parser() -> argparse.ArgumentParser:
     match.add_argument("--target", type=int, default=DEFAULT_TARGET)
     match.add_argument("-q", "--quiet", action="store_true")
     match.set_defaults(func=cmd_match)
+
+    play = sub.add_parser("play", help="play a game yourself in the terminal")
+    play.add_argument("--opponent", default="heuristic", help=f"who to play ({known})")
+    play.add_argument("--luck", type=float, default=None, metavar="PCT",
+                      help="rig every cut to this percentile of what it could have "
+                           "been for you (0 worst, 50 fair, 100 best)")
+    play.add_argument("--seed", type=int, default=None)
+    play.add_argument("--seat", type=int, default=0, choices=(0, 1))
+    play.add_argument("--dealer", type=int, default=0, choices=(0, 1),
+                      help="which seat deals the first hand")
+    play.add_argument("--target", type=int, default=DEFAULT_TARGET)
+    play.set_defaults(func=cmd_play)
 
     luck = sub.add_parser(
         "luck", help="attribute one game's cut luck to a player, round by round"
