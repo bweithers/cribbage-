@@ -16,25 +16,15 @@ import argparse
 import os
 import sys
 import time
-from dataclasses import dataclass, field
-from multiprocessing import Pool
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from _harness import AgentSpec, compare  # noqa: E402
+
 from cribbage.agents import HeuristicAgent, PositionalAgent  # noqa: E402
-from cribbage.arena import PairedResult, run_paired_match  # noqa: E402
-
-
-@dataclass
-class AgentSpec:
-    label: str
-    cls: type
-    kwargs: dict[str, Any] = field(default_factory=dict)
-
-    def build(self):
-        return self.cls(**self.kwargs)
+from cribbage.arena import PairedResult  # noqa: E402
 
 
 BASELINE = AgentSpec("heuristic", HeuristicAgent)
@@ -93,35 +83,6 @@ def parse_spec(text: str) -> dict[str, Any]:
             raise ValueError(f"expected knob=value, got {part!r}")
         kwargs[knob] = bool(float(value)) if knob in flags else float(value)
     return kwargs
-
-
-def _run_chunk(args) -> PairedResult:
-    spec_a, spec_b, pairs, seed = args
-    return run_paired_match(
-        spec_a.build, spec_b.build, pairs=pairs, seed=seed,
-        name_a=spec_a.label, name_b=spec_b.label,
-    )
-
-
-def compare(spec_a: AgentSpec, spec_b: AgentSpec, pairs: int, seed: int, workers: int):
-    """Run one mirrored comparison, split across processes."""
-    per_worker = [pairs // workers] * workers
-    for i in range(pairs % workers):
-        per_worker[i] += 1
-    jobs = [
-        (spec_a, spec_b, count, seed + index * 7919)
-        for index, count in enumerate(per_worker)
-        if count
-    ]
-    if workers == 1:
-        results = [_run_chunk(job) for job in jobs]
-    else:
-        with Pool(workers) as pool:
-            results = pool.map(_run_chunk, jobs)
-    merged = results[0]
-    for extra in results[1:]:
-        merged.merge(extra)
-    return merged
 
 
 def print_row(result: PairedResult) -> None:

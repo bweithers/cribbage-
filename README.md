@@ -7,7 +7,8 @@ Zero runtime dependencies — pure standard library. `pytest` is needed only to
 run the tests.
 
 ```bash
-python -m cribbage play  --luck 75                            # play it yourself, cuts rigged
+python -m cribbage serve                                      # play in a browser
+python -m cribbage play  --luck 75                            # play it yourself in the terminal
 python -m cribbage demo  --seed 3                             # a full annotated game
 python -m cribbage match --p0 heuristic --p1 random -n 2000   # statistics with confidence intervals
 python -m cribbage bench                                      # throughput
@@ -17,6 +18,8 @@ python -m pytest -q                                           # the test suite
 **Contents** — [what's here](#whats-here) · [design notes](#design-notes) ·
 [agents](#agents) · [does position awareness matter?](#does-position-awareness-matter) ·
 [where does the luck come from?](#where-does-the-luck-come-from) ·
+[closing the pegging gap](#closing-the-pegging-gap) ·
+[playing in a browser](#playing-in-a-browser) ·
 [testing](#testing) · [performance](#performance) · [next](#next)
 
 ## What's here
@@ -27,9 +30,14 @@ cribbage/
   scoring.py     table-driven scoring for the show and the play
   engine.py      CribbageState: legal_actions / apply_action / clone / determinize
   crib_table.py  expected crib value per lay-away, given a uniform opponent
-  agents/        the agent interface, plus random and one-ply expected-value baselines
+  peg_table.py   expected pegging value per keep, by seat
+  luck.py        attributing a game's cut luck, and rigging a cut to order
+  agents/        the agent interface, plus random and expected-value baselines
   arena.py       match running and statistics
-  cli.py         demo / match / bench
+  view.py        what one player may see, shared by both clients
+  api.py         FastAPI front door for the browser client
+  web/           the browser client, a single static page
+  cli.py         serve / play / luck / demo / match / bench
 ```
 
 Scope is deliberately narrow: **two players, 121 points, standard rules.** No
@@ -109,6 +117,8 @@ recording, training — is deliberately **not here yet**.
     don't take the count to 21 — are nowhere in the code; they fall out of the
     reply term.
 - `greedy` — the same agent with the reply term switched off. Useful as a control.
+- `pegging` — `heuristic` plus the expected pegging value of the keep. The only
+  agent here that beats the baseline by a measured, replicated margin. See below.
 - `positional` — `heuristic` plus awareness of the score: a continuous stance that
   defends when ahead and reaches for variance when behind, and an endgame
   objective that maximizes the probability of going out this deal rather than
@@ -492,6 +502,102 @@ faster way to calibrate what "the cards ran against me" is worth than any table.
    the pone, which the card-level table above shows and the seed-level ANOVA
    cannot.
 
+## Closing the pegging gap
+
+The position experiment came back null across the board, and the diagnosis was
+that its features perturbed only 1–3% of discards. The baseline's *real* gap was
+elsewhere: it maximizes hand plus crib and is completely blind to how the cards
+will play. Four fives are worth twenty at the show and peg abominably; A-2-3-4
+shows six and pegs beautifully. No expected-hand-score calculation can tell them
+apart. That distorts **every** hand.
+
+`peg_table.py` supplies the missing term. Pegging depends only on rank, so the
+table is keyed on the four-card rank multiset — all `C(16,4) = 1820` of them, in
+two copies because the deal changes pegging materially. Each entry is *sampled*
+rather than exact, with two things holding the noise down: the simulated opponent
+is dealt six and made to **discard** rather than handed four random cards, and
+scenario *i* uses `Random(i)` for every entry so the same shuffles face each
+candidate keep. Regenerate with `python scripts/build_peg_table.py` (~9 minutes
+on four cores).
+
+### The worst keep depends on which seat you are in
+
+This is the part folklore blurs, and the table is unambiguous about it.
+
+| | worst keeps | why |
+|---|---|---|
+| **as pone** | 5-5-5-6 (−4.08), **5-5-5-5** (−3.63, dead last of 1820) | you *lead*, so a fistful of fives means opening every sub-round by handing over fifteen-for-two |
+| **as dealer** | 8-8-8-8, J-J-J-J, T-J-Q-K, T-T-T-T | you *respond*, and once the count passes 21 four ten-value cards leave you nothing legal to answer with |
+
+`5-5-5-5` ranks **1st worst of 1820 as pone but 165th as dealer** — you never
+have to lead it. T-J-Q-K manages bottom-1% in *both* seats, which is why it is
+the example everyone reaches for. Best in both: low connected cards, 2-3-3-6 and
+A-6-6-7 and the like.
+
+### Does it win?
+
+Yes — and it is the first thing in this repository that does. The term changes
+**14.9% of discards**, an order of magnitude more engagement than the position
+features managed, and 10,000 mirrored games on **fresh seeds**:
+
+| variant | win rate | 95% interval | |
+|---|---|---|---|
+| **discard term, weight 0.5** | **50.83%** | [50.41, 51.25] | **significant, replicated** |
+| discard term, weight 1.0 | 50.39% | [49.87, 50.91] | not significant |
+| best-reply play model only | 49.85% | [49.62, 50.08] | not significant |
+| both together | 50.69% | [50.24, 51.14] | significant |
+
+The weight sweep is a clean inverted U — +0.20% at 0.25, **+0.92% at 0.5**,
++0.72% at 1.0, −0.40% at 1.5, and −2.37% by 3.0. The units argue for a weight of
+1.0, since all three terms are in points; the data argues for about a half, which
+makes sense once you notice that this term is *sampled* where the hand and crib
+terms are *exact*. Shrinking a noisy estimate toward zero is the right response
+to its noise.
+
+### A negative result worth keeping
+
+The baseline's play policy averages over the cards the opponent might hold, which
+quietly assumes they play a random one. Assuming instead that they find their
+**best** card is plainly more correct, and gives much more realistic numbers —
+leading a four into four unknown cards costs 0.62 expected points under that
+model against 0.17 under the averaging one.
+
+It measures **49.85%. Dead null.** It changes barely half a percent of play
+decisions, because scaling every risk up together mostly preserves their ranking.
+Being more right about the opponent's model turns out not to be the same thing as
+making different decisions. It is kept behind `best_reply`, defaulted off, so the
+result is not quietly lost.
+
+## Playing in a browser
+
+```bash
+pip install 'cribbage[web]'
+python -m cribbage serve      # then open http://127.0.0.1:8000
+```
+
+Pick an opponent, optionally rig the cut to a percentile, and play. The end of the
+game breaks your cut luck down round by round.
+
+**No rules in the browser.** Every legality check, every point scored and every
+redaction happens in the Python engine — the same one the analysis scripts use.
+The page is a drawing surface. Porting the scorer to JavaScript would have meant
+a second implementation of the 6,175-entry rank table, the flush and nobs rules
+and the play loop, free to drift from the tested one.
+
+**No session state either.** A game is a pure function of its configuration and
+the human's decisions: the deal comes from a seed, the opponent is deterministic,
+and a rigged cut is decided from the position rather than from chance. So the
+client holds `{config, actions}` and the server replays the whole game on every
+request — well under a millisecond against an engine doing ~80k `apply_action`
+per second. Nothing to expire, leak, or lose across a restart, and undo is just
+dropping the last action. The server recomputes the opponent's moves rather than
+accepting them, so a client can neither see them early nor forge them.
+
+`view.py` is the one place that decides what a player may see; the terminal
+client and the web client share it and differ only in how they draw the result.
+`tests/test_api.py` checks the JSON against the engine's own hidden state at
+every decision of a full game.
+
 ## Testing
 
 Correctness is the whole point of this layer: any future net is trained against
@@ -540,12 +646,18 @@ the rules.
 
 ## Next
 
-The neural-net work is intentionally deferred. When it starts, the open questions
-are, roughly in dependency order: observation encoding and what the net actually
-sees; the action space (one masked head over 15 discard pairs plus 52 cards,
-versus separate heads); where the net attaches to ISMCTS (policy prior, value
-head, or both); how to handle the imperfect information honestly, including why
-vanilla AlphaZero-style MCTS is unsound here and what ISMCTS and CFR do about it;
-and whether to bootstrap from the heuristic discard policy before self-play —
-bearing in mind it is pegging-blind and position-blind, so imitating it too
-closely would inherit both.
+The neural-net work is still deliberately deferred. When it starts, the open
+questions are roughly in dependency order: observation encoding and what the net
+actually sees; the action space (one masked head over 15 discard pairs plus 52
+cards, versus separate heads); where the net attaches to ISMCTS (policy prior,
+value head, or both); how to handle the imperfect information honestly, including
+why vanilla AlphaZero-style MCTS is unsound here and what ISMCTS and CFR do about
+it; and what to bootstrap from.
+
+That last one has moved. `pegging` is now the strongest baseline and is no longer
+pegging-blind, so it is a better imitation target than `heuristic` — but it is
+still **position-blind**, and its pegging *play* is the same one-ply policy as
+everything else here. The play is the part nothing in this repository has managed
+to improve: the discard now has three well-founded terms, while the policy that
+actually lays the cards down still averages over the opponent's holding one card
+deep. That is where a search or a net has the most room.

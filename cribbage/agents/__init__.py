@@ -6,12 +6,13 @@ from typing import Callable
 
 from .base import Agent
 from .heuristic import HeuristicAgent
+from .pegging import PeggingAwareAgent
 from .positional import PositionalAgent
 from .random_agent import RandomAgent
 
 __all__ = [
     "Agent", "RandomAgent", "HeuristicAgent", "PositionalAgent",
-    "AGENTS", "make_agent",
+    "PeggingAwareAgent", "AGENTS", "make_agent",
 ]
 
 #: Name -> factory.  ``make_agent`` passes a seed to those that accept one.
@@ -23,6 +24,8 @@ AGENTS: dict[str, Callable[..., Agent]] = {
     # README.  Registered so the CLI and the ablation harness can reach it, not
     # because it is stronger.  `endgame_smoothing` stays on: the unsmoothed
     # objective measured significantly worse.
+    # Weight 0.5 is measured, not guessed: see the README's pegging section.
+    "pegging": lambda **kw: PeggingAwareAgent(peg_weight=0.5),
     "positional": lambda **kw: PositionalAgent(
         stance_variance=0.3, stance_crib=0.4, stance_peg=0.5
     ),

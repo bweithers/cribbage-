@@ -18,8 +18,9 @@ from typing import Callable, Optional, Sequence
 
 from .agents.base import Agent
 from .cards import card_str, parse_card
-from .engine import DEFAULT_TARGET, CribbageState, Event, InfoState, Phase
+from .engine import DEFAULT_TARGET, CribbageState, InfoState, Phase
 from .luck import CutLuck, PercentileCut, cut_luck
+from .view import VisibleEvent, visible_events
 
 __all__ = ["Console", "InteractiveResult", "play_interactive", "parse_selection"]
 
@@ -104,11 +105,10 @@ def _hand_menu(cards: Sequence[int], playable: Optional[Sequence[int]] = None) -
 
 
 class _Renderer:
-    """Turns the engine's event log into a running commentary.
+    """Turns the redacted event log into a running commentary.
 
-    Careful about what it is allowed to show: the deal event carries both hands
-    and the opponent's discard carries their lay-away, neither of which the
-    player may see.  Everything from the cut onward is public at the table.
+    Deciding *what* the player may see is :mod:`cribbage.view`'s job, shared with
+    the web client; this only decides how to draw it.
     """
 
     def __init__(self, console: Console, human: int, names: Sequence[str]):
@@ -129,63 +129,64 @@ class _Renderer:
         return "yours" if player == self.human else f"{self.names[player]}'s"
 
     def flush(self, state: CribbageState) -> None:
-        for event in state.events[self.position:]:
-            self._render(event, state)
-        self.position = len(state.events)
+        events = visible_events(state, self.human)
+        for event in events[self.position:]:
+            self._render(event)
+        self.position = len(events)
 
-    def _score_tag(self, event: Event) -> str:
-        if not event.points:
+    def _score_tag(self, event: VisibleEvent) -> str:
+        if not event.points or event.actor is None:
             return ""
-        self.scores[event.player] += event.points
+        self.scores[event.actor] += event.points
         return (
             f"   +{event.points}   "
             f"({self.names[0]} {self.scores[0]} · {self.names[1]} {self.scores[1]})"
         )
 
-    def _render(self, event: Event, state: CribbageState) -> None:
+    def _render(self, event: VisibleEvent) -> None:
         say = self.console.say
         kind = event.kind
+        actor = event.actor if event.actor is not None else self.human
 
         if kind == "deal":
             say()
             say(f"{RULE}")
             say(
                 f"  Round {event.round}     "
-                f"{self.who(event.player)} {self.verb(event.player, 'deal')}, "
-                f"so the crib is {self.possessive(event.player)}"
+                f"{self.who(actor)} {self.verb(actor, 'deal')}, "
+                f"so the crib is {self.possessive(actor)}"
             )
             return
         if kind == "discard":
-            if event.player == self.human:
+            if actor == self.human:
                 say(f"  you lay away  {event.detail}")
             else:
-                say(f"  {self.who(event.player)} "
-                    f"{self.verb(event.player, 'lay')} two away")
+                say(f"  {self.who(actor)} {self.verb(actor, 'lay')} two away")
             return
         if kind == "cut":
             say(f"  cut  {event.detail}")
             return
         if kind == "heels":
-            say(f"  {self.who(event.player)} — his heels{self._score_tag(event)}")
+            say(f"  {self.who(actor)} — his heels{self._score_tag(event)}")
             return
         if kind == "play":
-            say(f"  {self.who(event.player)} {self.verb(event.player, 'play')} "
+            say(f"  {self.who(actor)} {self.verb(actor, 'play')} "
                 f"{event.detail}{self._score_tag(event)}")
             return
         if kind == "reset":
             say("        — count resets —")
             return
         if kind == "go":
-            say(f"  {self.who(event.player)} — {event.detail}{self._score_tag(event)}")
+            say(f"  {self.who(actor)} — {event.detail}{self._score_tag(event)}")
             return
         if kind in ("hand", "crib"):
             label = "crib" if kind == "crib" else "hand"
-            say(f"  {self.who(event.player)} {label}  {event.detail}"
+            say(f"  {self.who(actor)} {label}  {event.detail}"
                 f"{self._score_tag(event)}")
             return
         if kind == "win":
             say()
-            say(f"  {self.who(event.player)} wins.")
+            say(f"  {self.who(actor)} wins.")
 
 
 def _ask_discard(console: Console, info: InfoState) -> tuple[int, ...]:

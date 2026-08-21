@@ -132,6 +132,29 @@ class HeuristicAgent(Agent):
 
     # ------------------------------------------------------------------
 
+    def reply_cost(
+        self, after: list[int], unseen: Sequence[int], room: int,
+        held: int, pool: int,
+    ) -> tuple[float, float]:
+        """What the opponent is expected to score in reply, and how likely they
+        cannot answer at all.
+
+        This model assumes an *average* reply: it averages over the cards they
+        could hold rather than assuming they find the best of them.  That is
+        optimistic, and :class:`~cribbage.agents.pegging.PeggingAwareAgent`
+        replaces it with a model that is not.
+        """
+        replies = [card for card in unseen if CARD_VALUES[card] <= room]
+
+        # Hypergeometric: the chance none of their cards can be played.
+        blocked = pool - len(replies)
+        stuck = comb(blocked, held) / comb(pool, held) if blocked >= held else 0.0
+
+        if not replies:
+            return 0.0, stuck
+        mean_reply = sum(score_play(after + [r]) for r in replies) / len(replies)
+        return (1.0 - stuck) * mean_reply, stuck
+
     def effective_risk(self, info: InfoState) -> float:
         """How much to fear the opponent's reply.  Constant here; position-aware
         subclasses scale it by who is closer to going out."""
@@ -161,20 +184,12 @@ class HeuristicAgent(Agent):
 
             value = float(gain)
             if held and pool:
-                room = MAX_COUNT - count
-                replies = [c for c in unseen if CARD_VALUES[c] <= room]
-
-                # Hypergeometric: the chance none of their cards can be played.
-                blocked = pool - len(replies)
-                p_stuck = (
-                    comb(blocked, held) / comb(pool, held) if blocked >= held else 0.0
+                reply, stuck = self.reply_cost(
+                    after, unseen, MAX_COUNT - count, held, pool
                 )
-
-                if replies:
-                    mean_reply = sum(score_play(after + [r]) for r in replies) / len(replies)
-                    value -= risk_weight * (1.0 - p_stuck) * mean_reply
+                value -= risk_weight * reply
                 # If they cannot answer, this card very likely takes the go.
-                value += p_stuck * 1.0
+                value += stuck * 1.0
 
             # Ties go to the lower card, which keeps the count down and holds
             # the bigger cards back for later sub-rounds.

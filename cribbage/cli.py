@@ -144,6 +144,20 @@ def cmd_luck(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Run the browser client.  Imports uvicorn lazily: the web extra is optional."""
+    try:
+        import uvicorn
+    except ImportError:
+        print("The web client needs the extra dependencies:\n"
+              "    pip install 'cribbage[web]'", file=sys.stderr)
+        return 1
+    print(f"  Cribbage on http://{args.host}:{args.port}")
+    uvicorn.run("cribbage.api:app", host=args.host, port=args.port,
+                reload=args.reload, log_level="warning")
+    return 0
+
+
 def cmd_play(args: argparse.Namespace) -> int:
     opponent = make_agent(args.opponent, seed=args.seed)
     play_interactive(
@@ -249,6 +263,12 @@ def build_parser() -> argparse.ArgumentParser:
     match.add_argument("--target", type=int, default=DEFAULT_TARGET)
     match.add_argument("-q", "--quiet", action="store_true")
     match.set_defaults(func=cmd_match)
+
+    serve = sub.add_parser("serve", help="run the browser client")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--reload", action="store_true")
+    serve.set_defaults(func=cmd_serve)
 
     play = sub.add_parser("play", help="play a game yourself in the terminal")
     play.add_argument("--opponent", default="heuristic", help=f"who to play ({known})")

@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
 
 [project.scripts]
 cribbage = "cribbage.cli:main"
