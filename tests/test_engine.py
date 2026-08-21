@@ -373,19 +373,26 @@ def test_cut_indices_prescribe_one_round_at_a_time():
     assert base[2] != changed[2], "round three's starter must change"
 
 
-def test_cut_indices_wrap_and_fall_back_to_the_stream():
-    """Indices are taken modulo the 40 cards left, and a short list runs out
-    into the cut stream rather than failing."""
-    forty_cards = new_game(seed=5, cut_indices=[3]).clone()
-    assert forty_cards.deck  # sanity: the deck exists before the cut
-    same = new_game(seed=5, cut_indices=[3, 43], cut_seed=1)
-    other = new_game(seed=5, cut_indices=[43, 3], cut_seed=1)
-    for state in (same, other):
+def test_cut_indices_wrap_modulo_the_deck():
+    """The deck always holds 40 cards at the cut, so 43 and 3 are the same cut."""
+    def first_starter(indices):
+        state = new_game(seed=5, cut_indices=indices, cut_seed=1)
         state.apply_action(state.legal_actions()[0])
         state.apply_action(state.legal_actions()[0])
-    assert same.starter != other.starter, "43 mod 40 is 3, so swapping them matters"
+        return state.starter
 
-    short = new_game(seed=5, cut_indices=[3], cut_seed=1)
-    while short.round_index < 2 and not short.is_terminal():
-        short.apply_action(short.legal_actions()[0])
-    assert short.starter is not None or short.is_terminal()
+    assert first_starter([3]) == first_starter([43]), "43 mod 40 is 3"
+    assert first_starter([3]) != first_starter([4])
+
+
+def test_cut_indices_fall_back_to_the_stream_once_exhausted():
+    """A short list must not fail, and must not steal draws from the deal."""
+    prescribed = new_game(seed=5, cut_indices=[3], cut_seed=1)
+    streamed = new_game(seed=5, cut_seed=1)
+    rng = random.Random(0)
+    for state in (prescribed, streamed):
+        while state.round_index < 3 and not state.is_terminal():
+            state.apply_action(rng.choice(state.legal_actions()))
+    # Round one was prescribed, so the deals still match afterwards: the
+    # prescribed cut consumed nothing from the deal stream.
+    assert prescribed.dealt == streamed.dealt
