@@ -305,58 +305,102 @@ goes, so conditioning on it is not a clean causal estimate.
 
 | re-randomize only… | winner changes |
 |---|---|
-| the cards dealt | 48.71% |
+| the cards dealt | 49.09% |
 | who deals first | 37.45% |
-| the cut cards | 31.71% |
+| the cut cards | 31.96% |
 | *everything* | *49.75%* |
 
-The deal alone (48.71%) accounts for essentially all of the randomness available
+The deal alone (49.09%) accounts for essentially all of the randomness available
 (49.75%). Cribbage is close to being a game about who got the better cards.
+
+These are computed exactly rather than by sampling pairs: for a fixed deal and
+dealer the outcome is Bernoulli(p) across the cut axis, and two independent
+draws disagree with probability `2p(1-p)`. The plug-in estimator is biased low
+by a factor of `(1 - 1/n)`, since `p` is estimated from the same draws, so the
+code applies the `n/(n-1)` correction.
 
 #### Systematic advantage: variance of the final margin, by source
 
-| source | η² | ω² |
-|---|---|---|
-| the cards dealt | 39.0% | **38.9%** |
-| deal × cut | 30.8% | 15.6% |
-| deal × who dealt first | 12.6% | 12.4% |
-| who dealt first | 2.1% | **2.1%** |
-| the cut | 0.3% | **0.2%** |
-| cut × who dealt first | 0.1% | 0.0% |
-| irreducible three-way | 15.2% | — (error term) |
+Total margin sd is 23.0 points.
 
-ω² is the honest column: η² flatters `deal` and `cut` because they have 127
-degrees of freedom each, while `who dealt first` has one. The three-way term is
-the error term by construction, so ω² zeroes it and the column does not sum to
-100%.
+| source | η² | ω² | F | p | effect sd |
+|---|---|---|---|---|---|
+| the cards dealt | 39.0% | 38.9% | 325.9 | <1e-12 | **14.42 pts** |
+| deal × cut | 30.8% | 15.6% | 2.03 | <1e-12 | 9.10 pts |
+| deal × who dealt first | 12.6% | 12.4% | 105.0 | <1e-12 | 8.16 pts |
+| who dealt first | 2.1% | 2.1% | 2182.6 | <1e-12 | **4.67 pts** |
+| the cut | 0.3% | 0.2% | 2.42 | <1e-12 | **0.96 pts** |
+| cut × who dealt first | 0.1% | 0.0% | 0.94 | 0.66 | 0.00 pts |
+| irreducible three-way | 15.2% | — | (error) | | |
 
-### The interesting part: the cut is almost perfectly fair
+η² flatters `deal` and `cut`, which have 127 degrees of freedom each, against
+`who dealt first`, which has one — under the null, sum of squares grows with
+degrees of freedom, so ω² subtracts exactly `df × MS_error` before dividing.
+**The effect-sd column is the one to quote**: it is in points, so it answers
+whether a factor *matters* rather than only whether it is *detectable*.
 
-Compare the cut's two numbers. Re-randomizing it **changes the winner 31.71% of
-the time**, but it explains **0.2%** of the variance in margin and **0.0%** in
-combination with who dealt.
+The cut is a clean example of why that distinction is needed. With 32,768 games
+its main effect is overwhelmingly significant (F = 2.42, p < 1e-12) and utterly
+negligible (0.96 points against a 23.0-point spread). Significance is a claim
+about whether an effect is zero; it says nothing about size.
 
-Both are true, and they are not in tension. The starter is a *shared* card — it
-lands in both players' hands at once — so it almost never favours one player
-systematically. Its only asymmetric channels are the crib (dealer only), his
-heels, and nobs. But *which hand it pairs with* matters enormously, and that
-shows up as the `deal × cut` interaction (15.6%) and the three-way term rather
-than as a main effect.
+### The cut: large influence, near-zero *seed-level* advantage
+
+Re-randomizing the cut **changes the winner 31.96% of the time** while its main
+effect is worth **0.96 points**. Both are true. The starter is a *shared* card,
+so what it is worth depends entirely on the hand it lands beside — which puts
+almost all of its influence into the `deal × cut` interaction (9.10 points)
+rather than into a main effect.
+
+**But the ANOVA is the wrong instrument for "does a lucky cut favour the
+dealer", and it is worth being explicit about why.** Its `cut` factor is a *seed
+for an index sequence*, and the deck always holds 40 cards at the cut, so
+whether index 7 is a good card depends on what was dealt. Averaged over 128
+different deals, no cut seed can persistently favour a seat — the near-zero main
+effect is close to guaranteed by the design, not a discovery. The same objection
+applies to `cut × who dealt first` (F = 0.94, p = 0.66).
+
+The question has to be asked about the *card*, not the seed. The dealer scores
+the starter against two holdings — their hand and their crib — where the pone
+scores it against one, so a good starter should be worth more to the dealer.
+Points per deal, by the rank turned (~940 deals per row):
+
+| starter | dealer | pone | gap |
+|---|---|---|---|
+| **5** | 19.36 | 11.98 | **7.38** |
+| **J** | 17.50 | 10.10 | **7.39** |
+| 8 | 15.92 | 9.85 | 6.07 |
+| 7 | 15.91 | 10.04 | 5.87 |
+| 2 | 15.49 | 9.75 | 5.74 |
+| 6 | 15.87 | 10.39 | 5.48 |
+| K | 14.96 | 9.46 | 5.50 |
+| 3 | 15.25 | 10.06 | 5.19 |
+
+So a lucky cut **does** favour the dealer, by up to 2.2 points more than an
+unlucky one. Turning a five is worth 3.7 extra points to the dealer and 1.9 to
+the pone; a jack pays the dealer his heels outright. The seed-level ANOVA simply
+cannot see this, and reading its near-zero `cut` row as "the cut is fair" would
+have been wrong.
 
 The deal is the mirror image: it is the one input that is **not** shared, so it
-is where the systematic unfairness lives.
+is where the persistent, seat-specific unfairness lives.
 
-So, to answer the three questions directly:
+### The three questions, answered
 
-1. **Did you get the first deal?** A large, systematic edge — 56/44, +6.6 points
-   of margin — but only ~2% of the game-to-game variance, because it is a single
-   binary switch against the enormous variety of card sequences. Big effect,
-   small variance share.
-2. **Were you dealt better cards?** The dominant source of *both* kinds of luck:
-   ~39% of margin variance on its own, and it drives nearly all the rest through
-   its interactions.
-3. **Did you get luckier cuts?** Barely a source of unfairness at all (0.2%),
-   despite flipping a third of games. A shared card cannot favour anybody.
+1. **Did you get the first deal?** A large systematic edge — 56/44, +6.6 points
+   of margin, effect sd 4.67 points — but only ~2% of game-to-game variance,
+   because it is one binary switch against the enormous variety of card
+   sequences. Big effect, small variance share; the two are not the same thing.
+2. **Were you dealt better cards?** The dominant source of both: effect sd
+   **14.42 points**, ~39% of margin variance on its own, and it drives most of
+   the rest through its interactions. Re-randomizing the deal alone reproduces
+   almost all the randomness in the game.
+3. **Did you get luckier cuts?** It flips a third of games, but almost entirely
+   through *which hand it joins* rather than through favouring a player. Its
+   own systematic contribution is about a point of margin. It is not neutral,
+   though: a good starter is worth roughly two points more to the dealer than to
+   the pone, which the card-level table above shows and the seed-level ANOVA
+   cannot.
 
 ## Testing
 
