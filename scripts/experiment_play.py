@@ -30,10 +30,49 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _harness import DEFAULT_WORKERS, AgentSpec, Table, compare  # noqa: E402
 
 from cribbage.agents import (  # noqa: E402
-    HeuristicAgent, PeggingAwareAgent, RandomDiscardAgent, RandomPlayAgent,
+    HeuristicAgent, PeggingAwareAgent, PimcPeggingAgent,
+    RandomDiscardAgent, RandomPlayAgent,
 )
 
 BASELINE = AgentSpec("heuristic", HeuristicAgent)
+
+
+def pimc(args) -> int:
+    """Exact search against sampled holdings, versus searching shallowly.
+
+    The play is a small game once the opponent's hand is known -- eight plies,
+    four choices a node -- so the interesting question is whether solving it
+    outright against guessed holdings beats reasoning two plies deep against a
+    marginal.
+    """
+    started = time.time()
+    table = Table(width=26)
+    pairs = args.pimc_pairs
+    print(f"{pairs} pairs = {pairs * 2} games per row. This is the slow one: "
+          f"exact search runs about 2 games a second a core.")
+
+    deep = {"peg_weight": 0.5, "samples": 24}
+    table.header("Exact play search")
+    table.row(compare(AgentSpec("pimc, 24 samples", PimcPeggingAgent, deep),
+                      BASELINE, pairs, args.seed + 11, args.workers))
+    table.row(compare(
+        AgentSpec("pimc, 24 samples", PimcPeggingAgent, deep),
+        AgentSpec("twoply", PeggingAwareAgent,
+                  {"peg_weight": 0.5, "play_depth": 2}),
+        pairs, args.seed + 22, args.workers,
+    ))
+
+    table.header("How many sampled holdings are enough?")
+    for index, samples in enumerate([4, 8, 48]):
+        table.row(compare(
+            AgentSpec(f"pimc, {samples} samples", PimcPeggingAgent,
+                      {"peg_weight": 0.5, "samples": samples}),
+            AgentSpec("pimc, 24 samples", PimcPeggingAgent, deep),
+            pairs // 2, args.seed + 33 + index * 104729, args.workers,
+        ))
+
+    table.footer(time.time() - started)
+    return 0
 
 
 def confirm(args) -> int:
@@ -73,6 +112,10 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=8080)
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     parser.add_argument("--depth-pairs", type=int, default=2500)
+    parser.add_argument("--pimc", action="store_true",
+                        help="solve the play exactly against sampled opponent "
+                             "holdings, and compare against the shallower agents")
+    parser.add_argument("--pimc-pairs", type=int, default=2000)
     parser.add_argument("--confirm", action="store_true",
                         help="replicate the depth result on fresh seeds and "
                              "combine it with the pegging-aware discard")
@@ -80,6 +123,8 @@ def main() -> int:
 
     if args.confirm:
         return confirm(args)
+    if args.pimc:
+        return pimc(args)
 
     started = time.time()
     table = Table(width=24)

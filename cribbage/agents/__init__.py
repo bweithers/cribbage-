@@ -7,13 +7,14 @@ from typing import Callable
 from .base import Agent
 from .controls import RandomDiscardAgent, RandomPlayAgent
 from .heuristic import HeuristicAgent
-from .pegging import PeggingAwareAgent
+from .pegging import PeggingAwareAgent, PimcPeggingAgent
 from .positional import PositionalAgent
 from .random_agent import RandomAgent
 
 __all__ = [
     "Agent", "RandomAgent", "HeuristicAgent", "PositionalAgent",
-    "PeggingAwareAgent", "RandomPlayAgent", "RandomDiscardAgent",
+    "PeggingAwareAgent", "PimcPeggingAgent",
+    "RandomPlayAgent", "RandomDiscardAgent",
     "AGENTS", "make_agent",
 ]
 
@@ -31,6 +32,7 @@ AGENTS: dict[str, Callable[..., Agent]] = {
     # Weight 0.5 is measured, not guessed: see the README's pegging section.
     "pegging": lambda **kw: PeggingAwareAgent(peg_weight=0.5),
     "twoply": lambda **kw: PeggingAwareAgent(peg_weight=0.5, play_depth=2),
+    "pimc": lambda **kw: PimcPeggingAgent(peg_weight=0.5, samples=24),
     "positional": lambda **kw: PositionalAgent(
         stance_variance=0.3, stance_crib=0.4, stance_peg=0.5
     ),

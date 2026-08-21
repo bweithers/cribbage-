@@ -32,17 +32,23 @@ the opponent's model is not the same as making different decisions.
 
 from __future__ import annotations
 
+import math
+import random
 from itertools import groupby
 from math import comb
 from typing import Sequence
 
 from ..cards import CARD_VALUES, rank_of
 from ..engine import MAX_COUNT, InfoState
+
+KEEP_SIZE = 4
 from ..peg_table import peg_ev
+from ..keep_table import keep_value
+from ..pegsolve import best_cards
 from ..scoring import score_play
 from .heuristic import DiscardOption, HeuristicAgent
 
-__all__ = ["PeggingAwareAgent", "expected_max"]
+__all__ = ["PeggingAwareAgent", "PimcPeggingAgent", "expected_max"]
 
 
 def expected_max(
@@ -186,3 +192,93 @@ class PeggingAwareAgent(HeuristicAgent):
         if not self.peg_weight:
             return base
         return base + self.peg_weight * self.pegging_value(option, info)
+
+
+class PimcPeggingAgent(PeggingAwareAgent):
+    """Solves the play exactly, against sampled guesses at the opponent's hand.
+
+    The play is a *small* game: four cards each, at most eight plies, at most
+    four choices at a node.  The only thing making it hard is not knowing what
+    the opponent holds -- and that is a reason to sample, not a reason to search
+    shallowly.  So deal them a plausible hand from the cards not yet seen, solve
+    the resulting subgame outright with :mod:`cribbage.pegsolve`, and average the
+    value of each candidate card over many such deals.
+
+    This is Perfect Information Monte Carlo.  Its known weakness is *strategy
+    fusion*: averaging over worlds that are solved independently quietly assumes
+    it can play differently in each, when in reality one card has to be chosen
+    without knowing which world it is in.  ISMCTS is the principled repair, and
+    the engine already carries the pieces for it.  This is the step before that.
+
+    The discard is inherited unchanged from
+    :class:`PeggingAwareAgent`, so a match against that agent measures the search
+    and nothing else.
+    """
+
+    name = "pimc"
+
+    def __init__(self, samples: int = 24, seed: int = 0,
+                 opponent_beta: float = 0.0, oversample: int = 4, **kwargs):
+        super().__init__(**kwargs)
+        #: Opponent holdings sampled per decision.  More is steadier and slower.
+        self.samples = samples
+        #: How hard to bias sampled holdings toward ones worth keeping.  0 is a
+        #: uniform draw from the unseen cards, which is wrong in a specific way:
+        #: the opponent was dealt six and *chose* four, so plausible holdings are
+        #: the ones a player would have kept.
+        self.opponent_beta = opponent_beta
+        #: Candidates drawn per sample before weighting.  Costs almost nothing,
+        #: since weighting is a table lookup and only the survivors get solved.
+        self.oversample = oversample
+        self.rng = random.Random(seed)
+
+    def sample_holdings(self, info: InfoState, unseen: Sequence[int],
+                        held: int, draws: int) -> list[list[int]]:
+        """Guesses at what the opponent is holding, weighted by plausibility."""
+        if held == 0:
+            return [[]]
+        if self.opponent_beta <= 0:
+            return [self.rng.sample(unseen, held) for _ in range(draws)]
+
+        candidates = [
+            self.rng.sample(unseen, held)
+            for _ in range(draws * self.oversample)
+        ]
+        already = list(info.opp_played)
+        weights = []
+        for candidate in candidates:
+            kept = already + list(candidate)
+            if len(kept) == KEEP_SIZE:
+                quality = keep_value(sorted(rank_of(card) for card in kept))
+            else:  # pragma: no cover - a keep is always four cards
+                quality = 0.0
+            weights.append(math.exp(self.opponent_beta * quality))
+        return self.rng.choices(candidates, weights=weights, k=draws)
+
+    def play(self, info: InfoState) -> int:
+        legal = list(info.legal)
+        if len(legal) == 1:
+            return legal[0]
+
+        unseen = list(info.unseen)
+        held = info.opp_hand_size
+        if held > len(unseen):  # pragma: no cover - cannot happen in a real game
+            return super().play(info)
+
+        last = None
+        if info.play_order:
+            last = 0 if info.play_order[-1][0] == info.player else 1
+
+        totals: dict[int, float] = {card: 0.0 for card in legal}
+        # With the opponent out of cards the position is already perfect
+        # information, so one solve is the whole answer.
+        draws = 1 if held == 0 else self.samples
+        for theirs in self.sample_holdings(info, unseen, held, draws):
+            for card, value in best_cards(
+                info.hand, theirs, count=info.count, seq=info.seq, last=last
+            ).items():
+                if card in totals:
+                    totals[card] += value
+
+        # Ties go to the lower card, as elsewhere: it keeps the count down.
+        return max(totals, key=lambda card: (totals[card], -CARD_VALUES[card]))

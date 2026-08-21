@@ -19,6 +19,7 @@ python -m pytest -q                                           # the test suite
 [agents](#agents) · [does position awareness matter?](#does-position-awareness-matter) ·
 [where does the luck come from?](#where-does-the-luck-come-from) ·
 [closing the pegging gap](#closing-the-pegging-gap) ·
+[depth is not the bottleneck](#depth-is-not-the-bottleneck) ·
 [playing in a browser](#playing-in-a-browser) ·
 [testing](#testing) · [performance](#performance) · [next](#next)
 
@@ -119,7 +120,10 @@ recording, training — is deliberately **not here yet**.
 - `greedy` — the same agent with the reply term switched off. Useful as a control.
 - `pegging` — `heuristic` plus the expected pegging value of the keep, and
   optionally a deeper pegging search. The strongest agent here. See below.
-- `twoply` — `pegging` with `play_depth=2`. Both improvements together.
+- `twoply` — `pegging` with `play_depth=2`. Both improvements together, and the
+  strongest legal agent here.
+- `pimc` — solves the play *exactly* against sampled guesses at the opponent's
+  hand. Much more search, no stronger. The most interesting result in the repo.
 - `randomplay` / `randomdiscard` — controls that wreck exactly one half of the
   policy, so a match against `heuristic` measures what that half is worth.
 - `positional` — `heuristic` plus awareness of the score: a continuous stance that
@@ -617,6 +621,74 @@ Being more right about the opponent's model turns out not to be the same thing a
 making different decisions. It is kept behind `best_reply`, defaulted off, so the
 result is not quietly lost.
 
+## Depth is not the bottleneck
+
+The play is a *small* game. Four cards each, at most eight plies, at most four
+choices at a node — so once the opponent's holding is known there is no need to
+search heuristically at all. `pegsolve.py` solves it outright by minimax, in
+about 2.7ms with roughly 650 distinct positions memoised.
+
+That is a second implementation of the play rules, which is the duplication this
+project otherwise refuses. It earns its place by being far too hot to drive the
+real engine through, and it is kept honest the same way the scorer is:
+`tests/test_pegsolve.py` plays the solver's **own chosen line** through the real
+`CribbageState` and asserts the points that actually come out equal the value it
+predicted before a card was laid. A disagreement about the go, the reset, the
+last card, or whether 31 also pays would break that equality.
+
+`pimc` then samples opponent holdings from the unseen cards, solves each world
+exactly, and averages. This is Perfect Information Monte Carlo.
+
+### It is worth nothing
+
+```
+$ python -m cribbage ... # scripts/experiment_ceiling.py -n 400
+  seat 0 pegs by            net peg/round            95% CI
+  heuristic (control)              -0.031  [-0.142, +0.080]
+  PIMC, 24 sampled hands           +0.069  [-0.052, +0.190]
+  exact solve, CHEATING            +1.385  [+1.290, +1.480]
+```
+
+The third row is not a legal agent — it reads the opponent's hand straight off
+the engine. That is the point. **Solving the play exactly is worth 1.39 pegging
+points a round if you know what they hold, and approximately zero if you have to
+guess.** In win rate, `pimc` scores 50.02% against `heuristic` [49.11, 50.94] and
+49.40% against `twoply` — dead level with agents that look one and two plies
+deep, at fifty times the compute.
+
+Three explanations ruled out:
+
+- **Not sampling noise.** More holdings help until they don't: 4 samples loses to
+  24 by 4.3%, 8 loses by 1.4%, and 48 is level at 50.30%. It has converged, and
+  converged on parity.
+- **Not a broken solver.** The cheating row uses the same code and gains 1.39
+  points a round.
+- **Not simply a bad opponent prior.** Sampling holdings uniformly *is* wrong —
+  the opponent was dealt six and chose four — so `keep_table.py` weights each
+  sampled holding by how good a keep it is. At β=0.3 that is +0.148 against
+  uniform's +0.069, comfortably inside the noise. A better prior than "any four
+  cards" recovers no measurable part of the gap.
+
+What is left is **strategy fusion**, the known failure of PIMC: averaging over
+independently-solved worlds quietly assumes you may play differently in each,
+when in fact one card must be chosen without knowing which world you are in. The
+search happily picks cards that are excellent *if only you knew*.
+
+### Why this is the useful result
+
+It says where the remaining points are, and it is not depth. Going from one ply
+to two was worth something; going from two to a full exact solve was worth
+nothing. The 1.39-point gap is not a search problem at all — it is an inference
+problem, and no amount of looking further ahead touches it.
+
+That is the empirical case for ISMCTS, which searches over information sets
+rather than over determinized worlds and so does not fuse strategies, and for a
+network whose job is to *predict what the opponent kept* from their discard and
+their play. `clone()`, `information_state()` and `determinize()` have been in the
+engine since the first commit for exactly this, and the target is now measured
+rather than assumed: **1.39 pegging points a round is what perfect inference is
+worth.**
+
 ## Playing in a browser
 
 ```bash
@@ -707,16 +779,15 @@ That last one has moved. `twoply` is now the strongest baseline — a
 pegging-aware discard plus a two-ply play — and is a better imitation target than
 `heuristic`, which is both pegging-blind and shallower.
 
-The direction the measurements point is unambiguous: **the play is where the
-points are.** Randomising it costs 21 points of win rate against 47 for the
-discard, but the discard is already near the ceiling of what a static evaluation
-can do — three exactly-or-carefully-estimated terms, and refinements now buy
-tenths of a percent. The play is a two-ply expectimax against a uniform guess at
-the opponent's holding, and going from one ply to two was worth more than every
-discard refinement combined. Depth three, and inferring the opponent's holding
-from what they have already laid down, are both untried.
+The direction the measurements point is unambiguous, and it is not the one I
+expected. Randomising the play costs 21 points of win rate, so the play matters
+enormously — but *searching* it harder has stopped paying. One ply to two was
+worth something; two plies to a full exact solve was worth nothing at all.
 
-That is the case for search here rather than a bigger evaluation function — and
-it is exactly what ISMCTS with determinization does, which is why `clone()`,
-`information_state()` and `determinize()` have been in the engine since the
-first commit.
+What remains is worth **1.39 pegging points a round**, and it is entirely locked
+behind knowing what the opponent kept. So the next thing to build is not a deeper
+search but a better belief: ISMCTS, which searches information sets rather than
+determinized worlds and so does not fuse strategies, and a network whose job is
+to infer the opponent's holding from their discard and their play. That is a
+target with a number attached to it, which is a better place to start than a
+hunch.
