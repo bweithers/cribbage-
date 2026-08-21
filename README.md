@@ -117,8 +117,11 @@ recording, training — is deliberately **not here yet**.
     don't take the count to 21 — are nowhere in the code; they fall out of the
     reply term.
 - `greedy` — the same agent with the reply term switched off. Useful as a control.
-- `pegging` — `heuristic` plus the expected pegging value of the keep. The only
-  agent here that beats the baseline by a measured, replicated margin. See below.
+- `pegging` — `heuristic` plus the expected pegging value of the keep, and
+  optionally a deeper pegging search. The strongest agent here. See below.
+- `twoply` — `pegging` with `play_depth=2`. Both improvements together.
+- `randomplay` / `randomdiscard` — controls that wreck exactly one half of the
+  policy, so a match against `heuristic` measures what that half is worth.
 - `positional` — `heuristic` plus awareness of the score: a continuous stance that
   defends when ahead and reaches for variance when behind, and an endgame
   objective that maximizes the probability of going out this deal rather than
@@ -554,6 +557,52 @@ makes sense once you notice that this term is *sampled* where the hand and crib
 terms are *exact*. Shrinking a noisy estimate toward zero is the right response
 to its noise.
 
+### The play is worth far more than the discard refinements
+
+A claim I made and had to retract: I said nothing here had improved the play.
+That was wrong, and the numbers had already contradicted it. Each rung below
+differs from `heuristic` in exactly one respect, over 4,000 mirrored games:
+
+| variant | win rate | 95% interval | |
+|---|---|---|---|
+| random discard | 2.70% | [2.20, 3.20] | **−47.3%** |
+| random play | 29.12% | [28.04, 30.21] | **−20.9%** |
+| greedy — the reply term deleted | 41.42% | [40.45, 42.40] | **−8.6%** |
+| best-reply opponent model | 50.18% | [49.85, 50.50] | not significant |
+| **2-ply play** | **51.45%** | [50.80, 52.10] | **significant** |
+
+Throwing the cards down at random costs **21 points of win rate**. Deleting just
+the one-ply reply term — a single term in one expression — costs **8.6**. Set
+against those, every discard refinement in this repository is a rounding error.
+
+Read the first two rows carefully, though: they say how much you lose by
+*randomising* each half, which depends on how much room there is to be bad in
+each. A random discard can throw away the whole hand, so it is a deeper hole
+than a random play. They are not a clean importance decomposition.
+
+### Does searching deeper help?
+
+Yes, and it was simply never tried before. `play_depth=2` judges each card by
+what the opponent's best answer nets them *once my own best follow-up is
+subtracted* — so a card that hands them a pair is forgiven if it sets up a run
+for me. It changes **16.9%** of play decisions, against 0.5% for the best-reply
+model, at 0.71ms a decision.
+
+On fresh seeds, 8,000 mirrored games:
+
+| variant | win rate | 95% interval | |
+|---|---|---|---|
+| 2-ply alone | 50.54% | [49.98, 51.10] | not significant |
+| pegging discard alone | 50.38% | [49.92, 50.83] | not significant |
+| **both** | **51.76%** | [51.14, 52.39] | **significant** |
+| both, against 2-ply alone | 50.91% | [50.41, 51.41] | **significant** |
+
+Individually these sit near the detection threshold and the point estimates move
+between runs — 2-ply came in at +1.45% on its first run and +0.54% on
+replication, which is what regression to the mean looks like. The robust result
+is the pair together at **+1.76%**, and that the discard term still adds **+0.91%
+on top of** the deeper search, so the two are not measuring the same thing.
+
 ### A negative result worth keeping
 
 The baseline's play policy averages over the cards the opponent might hold, which
@@ -654,10 +703,20 @@ value head, or both); how to handle the imperfect information honestly, includin
 why vanilla AlphaZero-style MCTS is unsound here and what ISMCTS and CFR do about
 it; and what to bootstrap from.
 
-That last one has moved. `pegging` is now the strongest baseline and is no longer
-pegging-blind, so it is a better imitation target than `heuristic` — but it is
-still **position-blind**, and its pegging *play* is the same one-ply policy as
-everything else here. The play is the part nothing in this repository has managed
-to improve: the discard now has three well-founded terms, while the policy that
-actually lays the cards down still averages over the opponent's holding one card
-deep. That is where a search or a net has the most room.
+That last one has moved. `twoply` is now the strongest baseline — a
+pegging-aware discard plus a two-ply play — and is a better imitation target than
+`heuristic`, which is both pegging-blind and shallower.
+
+The direction the measurements point is unambiguous: **the play is where the
+points are.** Randomising it costs 21 points of win rate against 47 for the
+discard, but the discard is already near the ceiling of what a static evaluation
+can do — three exactly-or-carefully-estimated terms, and refinements now buy
+tenths of a percent. The play is a two-ply expectimax against a uniform guess at
+the opponent's holding, and going from one ply to two was worth more than every
+discard refinement combined. Depth three, and inferring the opponent's holding
+from what they have already laid down, are both untried.
+
+That is the case for search here rather than a bigger evaluation function — and
+it is exactly what ISMCTS with determinization does, which is why `clone()`,
+`information_state()` and `determinize()` have been in the engine since the
+first commit.

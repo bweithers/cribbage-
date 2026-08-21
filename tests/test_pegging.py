@@ -230,3 +230,109 @@ def test_best_reply_is_a_proper_expectation_over_the_maximum():
     )
     assert best[0] == pytest.approx(average[0])
     assert best[1] == pytest.approx(average[1])
+
+
+# ----------------------------------------------------------------------
+# Search depth, and the controls that measure what the play is worth
+# ----------------------------------------------------------------------
+
+
+def test_expected_max_matches_the_average_when_only_one_card_is_held():
+    """With a single card the maximum *is* the card, so the two agree exactly."""
+    from cribbage.agents.pegging import expected_max
+
+    values = [0.0, 2.0, 2.0, 6.0]
+    got, stuck = expected_max(values, unplayable=0, held=1, pool=4)
+    assert got == pytest.approx(sum(values) / len(values))
+    assert stuck == 0.0
+
+
+def test_expected_max_is_bounded_by_the_values_it_ranges_over():
+    from cribbage.agents.pegging import expected_max
+
+    values = [-3.0, 0.0, 1.0, 7.0]
+    for held in (1, 2, 3, 4):
+        got, _ = expected_max(values, unplayable=0, held=held, pool=len(values))
+        assert min(values) <= got <= max(values)
+
+
+def test_expected_max_rises_with_the_number_of_cards_held():
+    """More cards to choose from can only help the chooser."""
+    from cribbage.agents.pegging import expected_max
+
+    values = [0.0, 1.0, 2.0, 5.0, 9.0, 2.0]
+    seen = [expected_max(values, 0, held, len(values))[0] for held in range(1, 6)]
+    assert seen == sorted(seen)
+
+
+def test_being_stuck_is_certain_when_nothing_is_playable():
+    from cribbage.agents.pegging import expected_max
+
+    got, stuck = expected_max([], unplayable=5, held=2, pool=5)
+    assert got == 0.0 and stuck == pytest.approx(1.0)
+
+
+def test_depth_one_reproduces_the_baseline_play():
+    baseline = HeuristicAgent()
+    shallow = PeggingAwareAgent(peg_weight=0.0, best_reply=False, play_depth=1)
+    checked = 0
+    for seed in range(6):
+        state = new_game(seed=seed)
+        while not state.is_terminal():
+            player = state.current_player
+            info = state.information_state(player)
+            if info.phase is Phase.PLAY:
+                assert shallow.play(info) == baseline.play(info)
+                checked += 1
+            state.apply_action(baseline.act(info))
+    assert checked > 200
+
+
+def test_two_ply_changes_a_meaningful_share_of_play_decisions():
+    """Unlike the best-reply model, searching deeper actually moves decisions."""
+    baseline = HeuristicAgent()
+    deep = PeggingAwareAgent(peg_weight=0.0, play_depth=2)
+    differ = total = 0
+    for seed in range(12):
+        state = new_game(seed=seed)
+        while not state.is_terminal():
+            player = state.current_player
+            info = state.information_state(player)
+            if info.phase is Phase.PLAY and len(info.legal) > 1:
+                total += 1
+                differ += deep.play(info) != baseline.play(info)
+            state.apply_action(baseline.act(info))
+    assert differ / total > 0.08, f"only {differ / total:.1%} of plays changed"
+
+
+@pytest.mark.parametrize("depth", [1, 2])
+def test_deeper_play_still_only_returns_legal_cards(depth):
+    agent = PeggingAwareAgent(play_depth=depth)
+    rng = random.Random(depth)
+    state = new_game(seed=depth)
+    while not state.is_terminal():
+        player = state.current_player
+        info = state.information_state(player)
+        action = agent.act(info) if player == 0 else rng.choice(info.legal)
+        assert action in info.legal
+        state.apply_action(action)
+
+
+def test_the_controls_wreck_exactly_one_half_of_the_policy():
+    """RandomPlayAgent must still discard well, and vice versa."""
+    from cribbage.agents import RandomDiscardAgent, RandomPlayAgent
+
+    baseline = HeuristicAgent()
+    hand = parse_hand("5S 5H 5D 5C 2H 3C")
+    info = discard_view(hand, True)
+
+    # Random *play* leaves the discard untouched.
+    assert RandomPlayAgent(seed=1).discard(info) == baseline.discard(info)
+    # Random *discard* leaves the play untouched.
+    state = new_game(seed=4)
+    while state.phase is not Phase.PLAY:
+        state.apply_action(baseline.act(
+            state.information_state(state.current_player)
+        ))
+    play_info = state.information_state(state.current_player)
+    assert RandomDiscardAgent(seed=1).play(play_info) == baseline.play(play_info)

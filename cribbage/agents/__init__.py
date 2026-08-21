@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable
 
 from .base import Agent
+from .controls import RandomDiscardAgent, RandomPlayAgent
 from .heuristic import HeuristicAgent
 from .pegging import PeggingAwareAgent
 from .positional import PositionalAgent
@@ -12,7 +13,8 @@ from .random_agent import RandomAgent
 
 __all__ = [
     "Agent", "RandomAgent", "HeuristicAgent", "PositionalAgent",
-    "PeggingAwareAgent", "AGENTS", "make_agent",
+    "PeggingAwareAgent", "RandomPlayAgent", "RandomDiscardAgent",
+    "AGENTS", "make_agent",
 ]
 
 #: Name -> factory.  ``make_agent`` passes a seed to those that accept one.
@@ -20,12 +22,15 @@ AGENTS: dict[str, Callable[..., Agent]] = {
     "random": RandomAgent,
     "heuristic": HeuristicAgent,
     "greedy": lambda **kw: HeuristicAgent(risk_weight=0.0),
+    "randomplay": RandomPlayAgent,
+    "randomdiscard": RandomDiscardAgent,
     # Measured at parity with `heuristic` -- see the experiment section of the
     # README.  Registered so the CLI and the ablation harness can reach it, not
     # because it is stronger.  `endgame_smoothing` stays on: the unsmoothed
     # objective measured significantly worse.
     # Weight 0.5 is measured, not guessed: see the README's pegging section.
     "pegging": lambda **kw: PeggingAwareAgent(peg_weight=0.5),
+    "twoply": lambda **kw: PeggingAwareAgent(peg_weight=0.5, play_depth=2),
     "positional": lambda **kw: PositionalAgent(
         stance_variance=0.3, stance_crib=0.4, stance_peg=0.5
     ),
