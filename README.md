@@ -385,6 +385,66 @@ have been wrong.
 The deal is the mirror image: it is the one input that is **not** shared, so it
 is where the persistent, seat-specific unfairness lives.
 
+### Scoring one game's cut luck
+
+`cribbage/luck.py` answers a narrower and more practical question: *given this
+game's log, how lucky were the cuts for me?* — as one number.
+
+The counterfactual set is small and completely known. Once the discards are
+settled, both holdings, the crib and the forty undealt cards are all fixed, and
+the only thing that could have gone differently is which of those forty came up.
+So score all forty:
+
+```
+cut luck  =  (what the real starter gave you)  −  (what an average starter gives you)
+```
+
+Subtracting the expectation does two jobs at once. It removes the dealer's
+systematic crib-and-heels edge, which is position rather than luck. And it nets
+out cards that help both players — if a five drops and you both use it, it
+contributes nothing. Because all forty candidates are enumerated rather than
+sampled, the standard deviation comes out exactly, so "how many sd was that" is
+available with no distributional assumption. Round variances add, giving a
+game-level z-score.
+
+```
+$ python -m cribbage luck --seed 3
+
+   round   cut   show    exp   gross     net     sd      z
+       1    JD     17   18.5    -1.5    -3.2    5.4  -0.60
+       2    5C      8    5.9    +2.1    +4.2    4.5  +0.93
+       3    5H     15    8.8    +6.2    +8.0    4.5  +1.79
+       4    5S      6    7.3    -1.3    -3.2    2.3  -1.39
+       …
+```
+
+Note rounds 2, 3 and 4 all turn a five, and round 4's is worth **−3.2** — it
+helped the opponent more. A card is not lucky in itself, only against the hand
+it lands beside.
+
+**Is the number real?** Over 2,500 games it is centred on zero (+0.21, sd 11.8)
+as the zero-sum construction requires, and its z-score has **sd 0.994** — an
+independent check that the per-round variances and their summation are right. It
+correlates +0.58 with final margin, and sorts outcomes hard:
+
+| cut luck | net points | win rate |
+|---|---|---|
+| worst 25% | −14.7 | **18.7%** |
+| 2nd | −3.9 | 39.7% |
+| 3rd | +4.1 | 57.6% |
+| best 25% | +15.3 | **81.4%** |
+
+**What it deliberately does not say.** The 29 hand — three fives and the
+matching jack, case five cut — scores only **+5.3 net, z = +0.91**. That is
+correct: three fives and a jack already average 16.9 points against a *random*
+starter, so being dealt it is the luck and the cut merely finished it. The
+measure separates the two on purpose.
+
+Scope: this is the cut as realised at the show — hands, crib, his heels, nobs.
+Pegging is excluded; the starter barely touches it and could not be attributed
+cleanly. Rounds cut short by someone winning before the show are excluded and
+counted separately.
+
 ### The three questions, answered
 
 1. **Did you get the first deal?** A large systematic edge — 56/44, +6.6 points

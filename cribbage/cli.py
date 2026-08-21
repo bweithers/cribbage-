@@ -9,7 +9,9 @@ from typing import Optional, Sequence
 
 from .agents import AGENTS, make_agent
 from .arena import play_game, run_match
+from .cards import card_str
 from .engine import DEFAULT_TARGET, CribbageState, new_game
+from .luck import cut_luck
 
 __all__ = ["main", "format_transcript"]
 
@@ -105,6 +107,39 @@ def cmd_demo(args: argparse.Namespace) -> int:
     state = play_game(agents, seed=args.seed, dealer=0, target=args.target)
     names = [agents[0].name, agents[1].name]
     print(format_transcript(state, names))
+    return 0
+
+
+def cmd_luck(args: argparse.Namespace) -> int:
+    agents = [make_agent(args.p0, seed=args.seed), make_agent(args.p1, seed=args.seed)]
+    state = play_game(agents, seed=args.seed, dealer=0, target=args.target)
+    result = state.result()
+    names = [f"P{i} {agents[i].name}" for i in (0, 1)]
+
+    print(f"Cut luck — {names[0]} vs {names[1]}, seed {args.seed}")
+    print(f"  final {result.scores[0]}-{result.scores[1]}, "
+          f"{names[result.winner]} wins\n")
+
+    luck = cut_luck(state, args.player)
+    who = names[args.player]
+    print(f"  From {who}'s side. 'net' is their show points minus their")
+    print("  opponent's, measured against what an average cut would have given.\n")
+    print(f"  {'round':>6}{'cut':>6}{'show':>7}{'exp':>7}{'gross':>8}"
+          f"{'net':>8}{'sd':>7}{'z':>7}")
+    print("  " + "-" * 56)
+    for row in luck.rounds:
+        print(
+            f"  {row.round_index:>6}{card_str(row.starter):>6}"
+            f"{row.actual_gross:>7.0f}{row.expected_gross:>7.1f}"
+            f"{row.gross:>+8.1f}{row.net:>+8.1f}{row.sd_net:>7.1f}"
+            f"{row.net_z:>+7.2f}"
+        )
+    print("  " + "-" * 56)
+    print(f"\n  {who}: {luck.describe()}")
+    print(f"  gross: {luck.gross:+.1f} points (sd {luck.gross_sd:.1f}, "
+          f"z = {luck.gross_z:+.2f})")
+    if luck.skipped:
+        print(f"\n  {luck.skipped} round(s) excluded: the game ended before the show.")
     return 0
 
 
@@ -204,6 +239,17 @@ def build_parser() -> argparse.ArgumentParser:
     match.add_argument("--target", type=int, default=DEFAULT_TARGET)
     match.add_argument("-q", "--quiet", action="store_true")
     match.set_defaults(func=cmd_match)
+
+    luck = sub.add_parser(
+        "luck", help="attribute one game's cut luck to a player, round by round"
+    )
+    luck.add_argument("--p0", default="heuristic", help=f"seat 0 agent ({known})")
+    luck.add_argument("--p1", default="heuristic", help=f"seat 1 agent ({known})")
+    luck.add_argument("--player", type=int, default=0, choices=(0, 1),
+                      help="whose side to report from")
+    luck.add_argument("--seed", type=int, default=0)
+    luck.add_argument("--target", type=int, default=DEFAULT_TARGET)
+    luck.set_defaults(func=cmd_luck)
 
     bench = sub.add_parser("bench", help="measure scoring and simulation throughput")
     bench.add_argument("-n", "--games", type=int, default=200)

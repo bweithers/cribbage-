@@ -37,6 +37,7 @@ from .scoring import score_hand_detail, score_play
 __all__ = [
     "Phase",
     "Event",
+    "RoundRecord",
     "InfoState",
     "GameResult",
     "CribbageState",
@@ -81,6 +82,30 @@ class Event:
     points: int
     kind: str
     detail: str = ""
+
+
+@dataclass(frozen=True)
+class RoundRecord:
+    """What a round looked like at the moment the starter was turned.
+
+    Kept so an analysis can ask counterfactual questions about the cut without
+    replaying anything: at this point the discards are settled, so the hands,
+    the crib and the forty undealt cards are all fixed, and the only thing that
+    could have gone differently is which of those forty came up.
+    """
+
+    round_index: int
+    dealer: int
+    dealt: tuple[tuple[int, ...], tuple[int, ...]]
+    kept: tuple[tuple[int, ...], tuple[int, ...]]
+    crib: tuple[int, ...]
+    starter: int
+
+    @property
+    def candidates(self) -> tuple[int, ...]:
+        """The forty cards that could have been cut, the actual one included."""
+        dealt = set(self.dealt[0]) | set(self.dealt[1])
+        return tuple(c for c in range(NUM_CARDS) if c not in dealt)
 
 
 @dataclass(frozen=True)
@@ -166,6 +191,7 @@ class CribbageState:
         "hands", "dealt", "kept", "discards", "crib", "starter", "deck",
         "count", "seq", "played", "play_order", "turn", "last_to_play",
         "discard_turn", "events", "winner", "_rng", "_cut_rng", "_cut_indices",
+        "round_records",
     )
 
     def __init__(
@@ -184,6 +210,7 @@ class CribbageState:
         self.round_index = 0
         self.winner: Optional[int] = None
         self.events: list[Event] = []
+        self.round_records: list[RoundRecord] = []
         self._rng = rng if rng is not None else random.Random(seed)
         # By default the cut is drawn from the same stream as the deal, so a
         # single seed reproduces a whole game.  Passing `cut_seed` splits them
@@ -332,6 +359,7 @@ class CribbageState:
         other.last_to_play = self.last_to_play
         other.discard_turn = self.discard_turn
         other.events = list(self.events)
+        other.round_records = list(self.round_records)
         other.winner = self.winner
         other._rng = random.Random()
         other._rng.setstate(self._rng.getstate())
@@ -486,6 +514,16 @@ class CribbageState:
         else:
             position = self._cut_rng.randrange(len(self.deck))
         self.starter = self.deck.pop(position)
+        self.round_records.append(
+            RoundRecord(
+                round_index=self.round_index,
+                dealer=self.dealer,
+                dealt=(tuple(self.dealt[0]), tuple(self.dealt[1])),
+                kept=(tuple(self.kept[0]), tuple(self.kept[1])),
+                crib=tuple(self.crib),
+                starter=self.starter,
+            )
+        )
         self.events.append(
             Event(self.round_index, self.dealer, 0, "cut", card_str(self.starter))
         )
