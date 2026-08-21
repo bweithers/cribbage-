@@ -165,7 +165,7 @@ class CribbageState:
         "target", "scores", "dealer", "phase", "round_index",
         "hands", "dealt", "kept", "discards", "crib", "starter", "deck",
         "count", "seq", "played", "play_order", "turn", "last_to_play",
-        "discard_turn", "events", "winner", "_rng", "_cut_rng",
+        "discard_turn", "events", "winner", "_rng", "_cut_rng", "_cut_indices",
     )
 
     def __init__(
@@ -175,6 +175,7 @@ class CribbageState:
         seed: Optional[int] = None,
         rng: Optional[random.Random] = None,
         cut_seed: Optional[int] = None,
+        cut_indices: Optional[Sequence[int]] = None,
         _blank: bool = False,
     ):
         self.target = target
@@ -192,6 +193,12 @@ class CribbageState:
         # left at cut time, so a given cut stream draws the same *index* every
         # round regardless of what was dealt -- proper common random numbers.
         self._cut_rng = random.Random(cut_seed) if cut_seed is not None else self._rng
+        # Prescribed cut positions, one per round, taken modulo the 40 cards
+        # left in the deck.  This is finer-grained than `cut_seed`, which fixes
+        # the whole sequence at once: it lets an analysis change the starter in
+        # a single round and leave every other cut alone.  Rounds past the end
+        # of the list fall back to the stream.
+        self._cut_indices = list(cut_indices) if cut_indices is not None else None
 
         self.phase = Phase.DISCARD
         self.hands: list[list[int]] = [[], []]
@@ -333,6 +340,9 @@ class CribbageState:
         else:
             other._cut_rng = random.Random()
             other._cut_rng.setstate(self._cut_rng.getstate())
+        other._cut_indices = (
+            None if self._cut_indices is None else list(self._cut_indices)
+        )
         return other
 
     def reseed(self, seed: Optional[int] = None) -> None:
@@ -471,7 +481,11 @@ class CribbageState:
 
     def _cut_and_start_play(self) -> None:
         """Turn the starter, pay his heels, and open the play."""
-        self.starter = self.deck.pop(self._cut_rng.randrange(len(self.deck)))
+        if self._cut_indices is not None and self.round_index <= len(self._cut_indices):
+            position = self._cut_indices[self.round_index - 1] % len(self.deck)
+        else:
+            position = self._cut_rng.randrange(len(self.deck))
+        self.starter = self.deck.pop(position)
         self.events.append(
             Event(self.round_index, self.dealer, 0, "cut", card_str(self.starter))
         )
@@ -661,10 +675,14 @@ def new_game(
     dealer: int = 0,
     target: int = DEFAULT_TARGET,
     cut_seed: Optional[int] = None,
+    cut_indices: Optional[Sequence[int]] = None,
 ) -> CribbageState:
     """A fresh game, dealt and sitting at the pone's discard decision.
 
     Pass ``cut_seed`` to draw the starters from their own stream, independent of
-    the deal.
+    the deal, or ``cut_indices`` to prescribe each round's cut position outright.
     """
-    return CribbageState(dealer=dealer, target=target, seed=seed, cut_seed=cut_seed)
+    return CribbageState(
+        dealer=dealer, target=target, seed=seed,
+        cut_seed=cut_seed, cut_indices=cut_indices,
+    )

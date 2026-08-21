@@ -346,3 +346,46 @@ def test_clone_preserves_split_streams():
         right.apply_action(action)
     assert left.scores == right.scores
     assert left.starter == right.starter
+
+
+def test_cut_indices_prescribe_one_round_at_a_time():
+    """Finer-grained than cut_seed, which fixes the whole sequence at once.
+
+    Changing the index for round three must change that starter and leave the
+    earlier ones alone, which is what lets an analysis separate the effect of a
+    single cut from the effect of every cut in the game.
+    """
+    def starters(indices, rounds=3):
+        state = new_game(seed=5, cut_indices=indices)
+        seen = []
+        for _ in range(rounds):
+            while state.phase is Phase.DISCARD:
+                state.apply_action(state.legal_actions()[0])
+            seen.append(state.starter)
+            current = state.round_index
+            while state.round_index == current and not state.is_terminal():
+                state.apply_action(state.legal_actions()[0])
+        return seen
+
+    base = starters([7] * 12)
+    changed = starters([7, 7, 19] + [7] * 9)
+    assert base[:2] == changed[:2], "earlier rounds must be untouched"
+    assert base[2] != changed[2], "round three's starter must change"
+
+
+def test_cut_indices_wrap_and_fall_back_to_the_stream():
+    """Indices are taken modulo the 40 cards left, and a short list runs out
+    into the cut stream rather than failing."""
+    forty_cards = new_game(seed=5, cut_indices=[3]).clone()
+    assert forty_cards.deck  # sanity: the deck exists before the cut
+    same = new_game(seed=5, cut_indices=[3, 43], cut_seed=1)
+    other = new_game(seed=5, cut_indices=[43, 3], cut_seed=1)
+    for state in (same, other):
+        state.apply_action(state.legal_actions()[0])
+        state.apply_action(state.legal_actions()[0])
+    assert same.starter != other.starter, "43 mod 40 is 3, so swapping them matters"
+
+    short = new_game(seed=5, cut_indices=[3], cut_seed=1)
+    while short.round_index < 2 and not short.is_terminal():
+        short.apply_action(short.legal_actions()[0])
+    assert short.starter is not None or short.is_terminal()

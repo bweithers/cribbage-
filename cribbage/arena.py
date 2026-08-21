@@ -46,13 +46,17 @@ def play_game(
     dealer: int = 0,
     target: int = DEFAULT_TARGET,
     cut_seed: Optional[int] = None,
+    cut_indices: Optional[Sequence[int]] = None,
 ) -> CribbageState:
     """Play one game to completion and return the finished state.
 
     Agents are handed an :class:`~cribbage.engine.InfoState` and nothing else,
     so an agent cannot reach the hidden state even by accident.
     """
-    state = CribbageState(dealer=dealer, target=target, seed=seed, cut_seed=cut_seed)
+    state = CribbageState(
+        dealer=dealer, target=target, seed=seed,
+        cut_seed=cut_seed, cut_indices=cut_indices,
+    )
     for agent in agents:
         agent.reset()
 
